@@ -13,6 +13,8 @@
 //! The implementation is built on top of Embassy's async executor and uses the `bt-hci` crate
 //! for standardized HCI command and event handling.
 //!
+//! for standardized HCI command and event handling.
+//!
 
 mod event_handler;
 mod manager;
@@ -57,6 +59,33 @@ pub struct BluetoothDevice {
     pub name: Option<[u8; 32]>,
     /// Class of Device (`CoD`) indicating device type and capabilities
     pub class_of_device: Option<u32>,
+}
+
+/// Local device information collected during initialization
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LocalDeviceInfo {
+    /// Local Bluetooth device address
+    pub bd_addr: Option<[u8; 6]>,
+    /// HCI version information
+    pub hci_version: Option<u8>,
+    /// HCI revision
+    pub hci_revision: Option<u16>,
+    /// LMP version
+    pub lmp_version: Option<u8>,
+    /// Manufacturer name
+    pub manufacturer_name: Option<u16>,
+    /// LMP subversion
+    pub lmp_subversion: Option<u16>,
+    /// Local supported features (8 bytes)
+    pub local_features: Option<[u8; 8]>,
+    /// ACL data packet length
+    pub acl_data_packet_length: Option<u16>,
+    /// SCO data packet length  
+    pub sco_data_packet_length: Option<u8>,
+    /// Total number of ACL data packets
+    pub total_num_acl_data_packets: Option<u16>,
+    /// Total number of SCO data packets
+    pub total_num_sco_data_packets: Option<u16>,
 }
 
 /// Represents the current state of the Bluetooth system
@@ -109,6 +138,14 @@ pub enum BluetoothEvent {
     // State events
     /// Bluetooth state has changed
     StateChanged(BluetoothState),
+
+    // Initialization events
+    /// System reset completed successfully
+    ResetComplete,
+    /// Local device information has been read
+    LocalInfoComplete(LocalDeviceInfo),
+    /// Event mask configuration completed
+    EventMaskSet,
 
     // Discovery events
     /// A new device was discovered during inquiry
@@ -169,6 +206,14 @@ pub enum BluetoothCommand {
     Initialize,
     /// Reset the Bluetooth controller
     Reset,
+    /// Read local version information
+    ReadLocalVersionInfo,
+    /// Read local supported features
+    ReadLocalSupportedFeatures,
+    /// Read buffer size information
+    ReadBufferSize,
+    /// Read local Bluetooth device address
+    ReadBdAddr,
 
     // Discovery commands
     /// Start device discovery for the specified duration
@@ -361,6 +406,10 @@ where
     T: bt_hci::controller::Controller
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::controller_baseband::Reset>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::controller_baseband::SetEventMask>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadLocalVersionInformation>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadLocalSupportedFeatures>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadBufferSize>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadBdAddr>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::link_control::Inquiry>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::link_control::CreateConnection>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::link_control::Disconnect>

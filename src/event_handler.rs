@@ -304,6 +304,32 @@ impl BluetoothEventHandler {
                 defmt::error!("Bluetooth error: {:?}", defmt::Debug2Format(&error));
             }
 
+            BluetoothEvent::ResetComplete => {
+                defmt::info!("✓ Bluetooth controller reset completed");
+            }
+
+            BluetoothEvent::LocalInfoComplete(local_info) => {
+                defmt::info!("✓ Local device information collected");
+                if let Some(bd_addr) = local_info.bd_addr {
+                    defmt::info!(
+                        "  BD_ADDR: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                        bd_addr[5],
+                        bd_addr[4],
+                        bd_addr[3],
+                        bd_addr[2],
+                        bd_addr[1],
+                        bd_addr[0]
+                    );
+                }
+                if let Some(hci_version) = local_info.hci_version {
+                    defmt::info!("  HCI Version: {}", hci_version);
+                }
+            }
+
+            BluetoothEvent::EventMaskSet => {
+                defmt::info!("✓ Event mask configured successfully");
+            }
+
             BluetoothEvent::HandlerReady => {
                 // This event is sent by the handler itself, ignore
             }

@@ -23,6 +23,10 @@ where
     T: bt_hci::controller::Controller
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::controller_baseband::Reset>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::controller_baseband::SetEventMask>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadLocalVersionInformation>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadLocalSupportedFeatures>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadBufferSize>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadBdAddr>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::link_control::Inquiry>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::link_control::CreateConnection>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::link_control::Disconnect>
@@ -43,6 +47,10 @@ where
     T: bt_hci::controller::Controller
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::controller_baseband::Reset>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::controller_baseband::SetEventMask>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadLocalVersionInformation>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadLocalSupportedFeatures>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadBufferSize>
+        + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::info::ReadBdAddr>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::link_control::Inquiry>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::link_control::CreateConnection>
         + bt_hci::controller::ControllerCmdSync<bt_hci::cmd::link_control::Disconnect>
