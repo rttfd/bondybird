@@ -140,6 +140,8 @@ pub enum BluetoothError {
     HciError,
     /// Device not found
     DeviceNotFound,
+    /// Device not connected
+    DeviceNotConnected,
     /// Connection failed
     ConnectionFailed,
     /// Operation timeout

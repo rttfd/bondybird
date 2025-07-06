@@ -95,6 +95,8 @@ pub struct BluetoothManager<T: Transport, const SLOTS: usize = 4> {
     state: BluetoothState,
     /// Discovered devices
     devices: FnvIndexMap<[u8; 6], BluetoothDevice, MAX_DISCOVERED_DEVICES>,
+    /// Connection handles for connected devices (`BD_ADDR` -> `ConnHandle`)
+    connections: FnvIndexMap<[u8; 6], u16, MAX_DISCOVERED_DEVICES>,
     /// Local device information
     local_info: LocalDeviceInfo,
     /// Current discovery state
@@ -109,6 +111,7 @@ impl<T: Transport, const SLOTS: usize> BluetoothManager<T, SLOTS> {
         Self {
             state: BluetoothState::PoweredOff,
             devices: FnvIndexMap::new(),
+            connections: FnvIndexMap::new(),
             local_info: LocalDeviceInfo::default(),
             discovering: false,
             controller: ExternalController::new(transport),
@@ -246,6 +249,19 @@ impl<T: Transport, const SLOTS: usize> BluetoothManager<T, SLOTS> {
             event::Event::ConnectionComplete(ref complete) => {
                 // Connection complete
                 if complete.status.to_result().is_ok() {
+                    // Extract the BD_ADDR and connection handle
+                    let bd_addr_bytes = complete.bd_addr.raw();
+                    let mut addr = [0u8; 6];
+                    addr.copy_from_slice(bd_addr_bytes);
+
+                    // Store the connection handle for this device
+                    // Save the raw handle value which is directly accessible
+                    // When using bt-hci crate with real hardware, this should be
+                    // the actual connection handle provided by the controller
+                    let conn_handle = complete.handle.raw();
+                    self.connections.insert(addr, conn_handle).ok();
+
+                    // Update the state
                     self.state = BluetoothState::Connected;
                 } else {
                     // Handle connection failure
@@ -255,6 +271,28 @@ impl<T: Transport, const SLOTS: usize> BluetoothManager<T, SLOTS> {
             event::Event::DisconnectionComplete(ref complete) => {
                 // Disconnection complete
                 if complete.status.to_result().is_ok() {
+                    // Get the connection handle from the event
+                    let conn_handle = complete.handle.raw();
+
+                    // Find the device address associated with this connection handle
+                    // and remove it from our connections map
+                    let keys_to_remove: Vec<[u8; 6], 8> = self
+                        .connections
+                        .iter()
+                        .filter_map(|(addr, handle)| {
+                            if *handle == conn_handle {
+                                Some(*addr)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    // Remove each matching connection
+                    for addr in keys_to_remove {
+                        self.connections.remove(&addr);
+                    }
+
                     self.state = BluetoothState::PoweredOn;
                 }
                 // Even if disconnection failed, we'll set the state to PoweredOn
@@ -411,17 +449,12 @@ impl<T: Transport, const SLOTS: usize> BluetoothManager<T, SLOTS> {
     }
 
     /// Disconnect from a device
-    async fn disconnect_device(&mut self, _addr: [u8; 6]) -> Result<(), BluetoothError> {
-        // In a real implementation, we need to:
-        // 1. Keep track of connection handles when devices are connected
-        // 2. Use the connection handle for the specific device to disconnect
-
-        // Since we don't have active connection tracking yet, we'll use a simulated approach:
-        // - We'll assume a fixed connection handle for now
-        // - In a real implementation, you'd look up the correct handle based on the address
-
-        // Create a connection handle (this would normally come from the ConnectionComplete event)
-        let conn_handle = bt_hci::param::ConnHandle::new(0x0001);
+    async fn disconnect_device(&mut self, addr: [u8; 6]) -> Result<(), BluetoothError> {
+        // Get the connection handle for this device address from our connections map
+        let conn_handle = match self.connections.get(&addr) {
+            Some(handle) => bt_hci::param::ConnHandle::new(*handle),
+            None => return Err(BluetoothError::DeviceNotConnected),
+        };
 
         // Specify the reason for disconnection
         let disconnect_reason = bt_hci::param::DisconnectReason::RemoteUserTerminatedConn;
@@ -432,8 +465,7 @@ impl<T: Transport, const SLOTS: usize> BluetoothManager<T, SLOTS> {
         match self.controller.exec(&disconnect).await {
             Ok(()) => {
                 // The disconnection will be confirmed by a DisconnectionComplete event
-                // For now, we'll directly set the state to powered on
-                self.state = BluetoothState::PoweredOn;
+                // The actual device state update and connections map update will happen there
                 Ok(())
             }
             Err(_) => Err(BluetoothError::HciError),
