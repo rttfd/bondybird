@@ -6,20 +6,20 @@
 
 # BondyBird
 
-BondyBird is a BR/EDR (Classic) Bluetooth Host implementation for embedded systems, built on top of Embassy's async executor and designed for `no_std` environments. It provides a single-task, channel-based architecture that is both memory-efficient and easy to integrate with REST API handlers.
+BondyBird is a BR/EDR (Classic) Bluetooth Host implementation for embedded systems, built on top of Embassy's async executor and designed for `no_std` environments. It provides a single-task, channel-based architecture that is both memory-efficient and easy to integrate with application code.
 
 ## Architecture
 
 BondyBird uses a simplified architecture with:
 
 1. **Single Manager Task** - A single async task that handles all Bluetooth operations
-2. **Static Channels** - Embassy channels for communication between REST handlers and the manager
+2. **Static Channels** - Embassy channels for communication between API functions and the manager
 3. **Direct HCI Integration** - Using the bt-hci library for controller communication
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  REST Handler   │    │  API REQUEST     │    │                 │
-│   Functions     │───▶│    CHANNEL       │───▶│                 │
+│  API Functions  │    │  API REQUEST     │    │                 │
+│                 │───▶│    CHANNEL       │───▶│                 │
 │                 │    └──────────────────┘    │   Bluetooth     │
 └─────────────────┘                            │   Manager       │
         ▲                                      │    Task         │
@@ -40,7 +40,7 @@ BondyBird uses a simplified architecture with:
 ## Quickstart
 
 ```rust,no_run,ignore
-use bondybird::{bluetooth_manager_task, handle_discover, handle_get_devices};
+use bondybird::{bluetooth_manager_task, api};
 use bt_hci::transport::YourTransport;
 use embassy_executor::Spawner;
 
@@ -52,42 +52,43 @@ async fn main(spawner: Spawner) {
     // Spawn the single Bluetooth manager task
     spawner.spawn(bluetooth_manager_task(transport)).unwrap();
     
-    // Use handler functions in your REST API endpoints
-    let _ = handle_discover().await;
-    let devices = handle_get_devices().await.unwrap();
+    // Use API functions in your application
+    let _ = api::start_discovery().await;
+    let devices = api::get_devices().await.unwrap();
 }
 ```
 
-You can use the provided handler functions in your REST API endpoints:
-- `handle_discover()` - Start device discovery
-- `handle_get_devices()` - Get list of discovered devices
-- `handle_pair(address)` - Connect to a device
-- `handle_disconnect(address)` - Disconnect from a device
-- `handle_get_state()` - Get current Bluetooth state
+You can use the provided API functions in your application:
+- `api::start_discovery()` - Start device discovery
+- `api::get_devices()` - Get list of discovered devices
+- `api::connect_device(address)` - Connect to a device
+- `api::disconnect_device(address)` - Disconnect from a device
+- `api::get_state()` - Get current Bluetooth state
 
-## Integration with REST API
+## Integration with Applications
 
-BondyBird is designed to be easily integrated with REST API handlers. The handler functions are simple and use static channels for communication with the Bluetooth manager task.
+BondyBird is designed to be easily integrated with applications. The API functions are simple and use static channels for communication with the Bluetooth manager task. This makes it easy to integrate with web servers, REST APIs, or any other application architecture.
 
 ```rust,no_run,ignore
-// In your REST API handler
-async fn rest_discover_endpoint() -> Response {
-    match handle_discover().await {
-        Ok(()) => Response::new(200, "Discovery started"),
-        Err(e) => Response::new(400, format!("Error: {:?}", e)),
+// In your application handler
+async fn discover_devices() -> Result<(), Box<dyn std::error::Error>> {
+    match bondybird::api::start_discovery().await {
+        Ok(()) => println!("Discovery started"),
+        Err(e) => println!("Error: {:?}", e),
     }
+    Ok(())
 }
 
-async fn rest_get_devices_endpoint() -> Response {
-    match handle_get_devices().await {
+async fn list_devices() -> Result<(), Box<dyn std::error::Error>> {
+    match bondybird::api::get_devices().await {
         Ok(devices) => {
-            let devices_json = devices.iter().map(|d| {
-                // Convert devices to JSON...
-            }).collect::<Vec<_>>();
-            Response::new(200, serde_json::to_string(&devices_json).unwrap())
+            for device in devices {
+                println!("Device: {:?}", device);
+            }
         },
-        Err(e) => Response::new(400, format!("Error: {:?}", e)),
+        Err(e) => println!("Error: {:?}", e),
     }
+    Ok(())
 }
 ```
 
@@ -95,22 +96,22 @@ async fn rest_get_devices_endpoint() -> Response {
 
 ```rust,no_run,ignore
 // 1. Start discovery
-let _ = handle_discover().await;
+let _ = bondybird::api::start_discovery().await;
 
 // 2. Wait for discovery to find devices
 embassy_time::Timer::after(embassy_time::Duration::from_secs(5)).await;
 
 // 3. Get discovered devices
-let devices = handle_get_devices().await.unwrap();
+let devices = bondybird::api::get_devices().await.unwrap();
 
 // 4. Connect to the first device
 if let Some(device) = devices.first() {
     let addr_str = format_address(device.addr);
-    let _ = handle_pair(addr_str.into()).await;
+    let _ = bondybird::api::connect_device(addr_str.into()).await;
 }
 
 // 5. Check Bluetooth state
-let state = handle_get_state().await.unwrap();
+let state = bondybird::api::get_state().await.unwrap();
 ```
 
 ## Features

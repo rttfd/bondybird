@@ -42,11 +42,12 @@
 //!    spawner.spawn(bluetooth_manager_task(transport)).unwrap();
 //!    ```
 //!
-//! 2. Use the provided handler functions in your REST API endpoints:
+//! 2. Use the API functions from the `api` module to interact with the manager:
 //!    ```rust,no_run
-//!    let devices = handle_get_devices().await.unwrap();
-//!    let _ = handle_discover().await;
-//!    let _ = handle_pair(address).await;
+//!    use bondybird::api::{get_devices, start_discovery, connect_device};
+//!    let devices = get_devices().await.unwrap();
+//!    let _ = start_discovery().await;
+//!    let _ = connect_device(address).await;
 //!    ```
 
 use bt_hci::{
@@ -57,7 +58,7 @@ use bt_hci::{
     transport::Transport,
 };
 use embassy_futures::select::{Either, select};
-use heapless::{FnvIndexMap, String, Vec};
+use heapless::{FnvIndexMap, Vec};
 
 use crate::{
     API_REQUEST_CHANNEL, API_RESPONSE_CHANNEL, ApiRequest, ApiResponse, BluetoothDevice,
@@ -742,125 +743,5 @@ pub async fn bluetooth_manager_task<T: Transport + 'static>(transport: T) -> ! {
                 api_sender.send(response).await;
             }
         }
-    }
-}
-
-// =============================================================================
-// REST HANDLER FUNCTIONS
-// =============================================================================
-
-/// Handle discover request
-///
-/// This function is called by REST endpoints to start device discovery.
-/// It sends a request to the Bluetooth manager and waits for a response.
-///
-/// # Errors
-///
-/// Returns a `BluetoothError` if:
-/// - The discovery is already in progress (`AlreadyInProgress`)
-/// - The HCI command fails (`HciError`)
-/// - The response is unexpected (returns `HciError`)
-pub async fn handle_discover() -> Result<(), BluetoothError> {
-    let sender = API_REQUEST_CHANNEL.sender();
-    let receiver = API_RESPONSE_CHANNEL.receiver();
-
-    sender.send(ApiRequest::Discover).await;
-
-    match receiver.receive().await {
-        ApiResponse::DiscoverComplete => Ok(()),
-        ApiResponse::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
-    }
-}
-
-/// Handle get devices request
-///
-/// This function is called by REST endpoints to get the list of discovered devices.
-///
-/// # Errors
-///
-/// Returns `BluetoothError::HciError` if there is an issue communicating with the Bluetooth controller,
-/// or other specific `BluetoothError` variants as returned by the manager.
-pub async fn handle_get_devices()
--> Result<Vec<BluetoothDevice, MAX_DISCOVERED_DEVICES>, BluetoothError> {
-    let sender = API_REQUEST_CHANNEL.sender();
-    let receiver = API_RESPONSE_CHANNEL.receiver();
-
-    sender.send(ApiRequest::GetDevices).await;
-
-    match receiver.receive().await {
-        ApiResponse::Devices(devices) => Ok(devices),
-        ApiResponse::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
-    }
-}
-
-/// Handle pair request
-///
-/// This function is called by REST endpoints to pair with a device.
-///
-/// # Errors
-///
-/// Returns a `BluetoothError` if:
-/// - The address format is invalid (`InvalidParameter`)
-/// - The device was not previously discovered (`DeviceNotFound`)
-/// - The connection attempt fails (`ConnectionFailed`)
-/// - The response is unexpected (returns `HciError`)
-pub async fn handle_pair(address: String<64>) -> Result<(), BluetoothError> {
-    let sender = API_REQUEST_CHANNEL.sender();
-    let receiver = API_RESPONSE_CHANNEL.receiver();
-
-    sender.send(ApiRequest::Pair(address)).await;
-
-    match receiver.receive().await {
-        ApiResponse::PairComplete => Ok(()),
-        ApiResponse::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
-    }
-}
-
-/// Handle disconnect request
-///
-/// This function is called by REST endpoints to disconnect from a device.
-///
-/// # Errors
-///
-/// Returns a `BluetoothError` if:
-/// - The address format is invalid (`InvalidParameter`)
-/// - The device is not currently connected (`DeviceNotFound`)
-/// - The HCI command fails (`HciError`)
-/// - The response is unexpected (returns `HciError`)
-pub async fn handle_disconnect(address: String<64>) -> Result<(), BluetoothError> {
-    let sender = API_REQUEST_CHANNEL.sender();
-    let receiver = API_RESPONSE_CHANNEL.receiver();
-
-    sender.send(ApiRequest::Disconnect(address)).await;
-
-    match receiver.receive().await {
-        ApiResponse::DisconnectComplete => Ok(()),
-        ApiResponse::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
-    }
-}
-
-/// Handle get state request
-///
-/// This function is called by REST endpoints to get the current Bluetooth state.
-///
-/// # Errors
-///
-/// Returns a `BluetoothError` if:
-/// - The HCI command fails (`HciError`)
-/// - The response is unexpected (returns `HciError`)
-pub async fn handle_get_state() -> Result<BluetoothState, BluetoothError> {
-    let sender = API_REQUEST_CHANNEL.sender();
-    let receiver = API_RESPONSE_CHANNEL.receiver();
-
-    sender.send(ApiRequest::GetState).await;
-
-    match receiver.receive().await {
-        ApiResponse::State(state) => Ok(state),
-        ApiResponse::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
     }
 }

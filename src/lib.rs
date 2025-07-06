@@ -23,13 +23,13 @@
 //! The simplified architecture consists of:
 //!
 //! 1. **Bluetooth Manager Task** - Single task that owns HCI controller and handles everything
-//! 2. **Static Channels** - For communication between REST handlers and manager
-//! 3. **REST Handler Functions** - Simple functions that send requests and wait for responses
+//! 2. **Static Channels** - For communication between API functions and manager
+//! 3. **API Functions** - Simple functions that send requests and wait for responses
 //!
 //! ```text
 //! ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-//! │  REST Handler   │    │  API REQUEST     │    │                 │
-//! │   Functions     │───▶│    CHANNEL       │───▶│                 │
+//! │  API Functions  │    │  API REQUEST     │    │                 │
+//! │                 │───▶│    CHANNEL       │───▶│                 │
 //! │                 │    └──────────────────┘    │                 │
 //! └─────────────────┘                            │   Bluetooth     │
 //!         ▲                                      │   Manager       │
@@ -46,15 +46,36 @@
 //!                                                │  (select! loop)  │
 //!                                                └──────────────────┘
 //! ```
+//!
+//! ## Usage
+//!
+//! ```rust,no_run
+//! use bondybird::{bluetooth_manager_task, api};
+//! use bt_hci::transport::YourTransport;
+//! use embassy_executor::Spawner;
+//!
+//! #[embassy_executor::main]
+//! async fn main(spawner: Spawner) {
+//!     let transport = YourTransport::new();
+//!     
+//!     // Spawn the Bluetooth manager task
+//!     spawner.spawn(bluetooth_manager_task(transport)).unwrap();
+//!     
+//!     // Use API functions
+//!     let _ = api::start_discovery().await;
+//!     let devices = api::get_devices().await.unwrap();
+//! }
+//! ```
 
 /// Bluetooth Manager Task - Single task that handles everything
 pub mod manager;
 
+/// API Functions - Public interface for interacting with the Bluetooth manager
+pub mod api;
+
 // Export main components
-pub use manager::{
-    bluetooth_manager_task, handle_disconnect, handle_discover, handle_get_devices,
-    handle_get_state, handle_pair,
-};
+pub use api::{connect_device, disconnect_device, get_devices, get_state, start_discovery};
+pub use manager::bluetooth_manager_task;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
@@ -64,10 +85,10 @@ use heapless::{String, Vec};
 // STATIC CHANNELS
 // =============================================================================
 
-/// Static channel for API requests from REST handlers to Bluetooth Manager
+/// Static channel for API requests from API functions to Bluetooth Manager
 pub static API_REQUEST_CHANNEL: Channel<CriticalSectionRawMutex, ApiRequest, 8> = Channel::new();
 
-/// Static channel for API responses from Bluetooth Manager to REST handlers
+/// Static channel for API responses from Bluetooth Manager to API functions
 pub static API_RESPONSE_CHANNEL: Channel<CriticalSectionRawMutex, ApiResponse, 8> = Channel::new();
 
 // =============================================================================
