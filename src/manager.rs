@@ -53,6 +53,7 @@ use bt_hci::{
     ControllerToHostPacket, cmd,
     controller::{Controller, ControllerCmdSync, ExternalController},
     event,
+    param::EventMask,
     transport::Transport,
 };
 use embassy_futures::select::{Either, select};
@@ -145,6 +146,26 @@ impl<T: Transport, const SLOTS: usize> BluetoothManager<T, SLOTS> {
             Some(value)
         } else {
             None
+        }
+    }
+
+    /// Helper method to convert `CoreSpecificationVersion` to u8
+    fn core_spec_version_to_u8(version: bt_hci::param::CoreSpecificationVersion) -> u8 {
+        match version {
+            bt_hci::param::CoreSpecificationVersion::VERSION_1_1 => 0x01,
+            bt_hci::param::CoreSpecificationVersion::VERSION_1_2 => 0x02,
+            bt_hci::param::CoreSpecificationVersion::VERSION_2_0_EDR => 0x03,
+            bt_hci::param::CoreSpecificationVersion::VERSION_2_1_EDR => 0x04,
+            bt_hci::param::CoreSpecificationVersion::VERSION_3_0_HS => 0x05,
+            bt_hci::param::CoreSpecificationVersion::VERSION_4_0 => 0x06,
+            bt_hci::param::CoreSpecificationVersion::VERSION_4_1 => 0x07,
+            bt_hci::param::CoreSpecificationVersion::VERSION_4_2 => 0x08,
+            bt_hci::param::CoreSpecificationVersion::VERSION_5_0 => 0x09,
+            bt_hci::param::CoreSpecificationVersion::VERSION_5_1 => 0x0A,
+            bt_hci::param::CoreSpecificationVersion::VERSION_5_2 => 0x0B,
+            bt_hci::param::CoreSpecificationVersion::VERSION_5_3 => 0x0C,
+            bt_hci::param::CoreSpecificationVersion::VERSION_5_4 => 0x0D,
+            _ => 0x00, // Default to 1.0B for unknown versions
         }
     }
 
@@ -527,16 +548,50 @@ impl<T: Transport, const SLOTS: usize> BluetoothManager<T, SLOTS> {
             Err(_) => return Err(BluetoothError::HciError),
         }
 
-        // For now, we'll use hardcoded values since we don't have direct access
-        // to set the event mask properly
-        // In a real implementation, you would find the correct way to set this
+        // Set event mask to enable the events we're interested in
+        let event_mask = EventMask::new()
+            .enable_inquiry_complete(true)
+            .enable_inquiry_result(true)
+            .enable_conn_complete(true)
+            .enable_conn_request(true)
+            .enable_disconnection_complete(true)
+            .enable_authentication_complete(true)
+            .enable_remote_name_request_complete(true)
+            .enable_encryption_change_v1(true)
+            .enable_pin_code_request(true)
+            .enable_link_key_request(true)
+            .enable_link_key_notification(true)
+            .enable_read_remote_supported_features_complete(true)
+            .enable_read_remote_version_information_complete(true)
+            .enable_hardware_error(true)
+            .enable_inquiry_result_with_rssi(true)
+            .enable_read_remote_ext_features_complete(true)
+            .enable_ext_inquiry_result(true)
+            .enable_io_capability_request(true)
+            .enable_io_capability_response(true)
+            .enable_user_confirmation_request(true)
+            .enable_user_passkey_request(true)
+            .enable_simple_pairing_complete(true);
+        // Set the event mask command
+        let set_event_mask = cmd::controller_baseband::SetEventMask::new(event_mask);
+        match self.controller.exec(&set_event_mask).await {
+            Ok(()) => {}
+            Err(_) => return Err(BluetoothError::HciError),
+        }
 
         // Get local version information
         let read_local_version = cmd::info::ReadLocalVersionInformation::new();
         match self.controller.exec(&read_local_version).await {
-            Ok(_) => {
-                // For now, using a hard-coded value
-                self.local_info.hci_version = Some(0x0A); // Bluetooth 5.0
+            Ok(version_info) => {
+                // Extract and store the version information using our helper method
+                let hci_version = Self::core_spec_version_to_u8(version_info.hci_version);
+                let lmp_version = Self::core_spec_version_to_u8(version_info.lmp_version);
+
+                self.local_info.hci_version = Some(hci_version);
+                self.local_info.hci_revision = Some(version_info.hci_subversion);
+                self.local_info.lmp_version = Some(lmp_version);
+                self.local_info.manufacturer_name = Some(version_info.company_identifier);
+                self.local_info.lmp_subversion = Some(version_info.lmp_subversion);
             }
             Err(_) => return Err(BluetoothError::HciError),
         }
@@ -544,9 +599,12 @@ impl<T: Transport, const SLOTS: usize> BluetoothManager<T, SLOTS> {
         // Get local BD_ADDR
         let read_bd_addr = cmd::info::ReadBdAddr::new();
         match self.controller.exec(&read_bd_addr).await {
-            Ok(_) => {
-                // For now, using a hard-coded value
-                self.local_info.bd_addr = Some([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+            Ok(bd_addr) => {
+                // The return value is the BdAddr directly
+                let bd_addr_bytes = bd_addr.raw();
+                let mut addr = [0u8; 6];
+                addr.copy_from_slice(bd_addr_bytes);
+                self.local_info.bd_addr = Some(addr);
             }
             Err(_) => return Err(BluetoothError::HciError),
         }

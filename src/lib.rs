@@ -1,7 +1,12 @@
 #![no_std]
 #![doc = "BondyBird - A Rust library for BR/EDR (Classic) Bluetooth in embedded systems"]
 #![warn(missing_docs)]
-#![allow(dead_code, clippy::unused_async, clippy::large_enum_variant)]
+#![allow(
+    dead_code,
+    clippy::unused_async,
+    clippy::large_enum_variant,
+    clippy::too_many_lines
+)]
 
 //! # BondyBird
 //!
