@@ -115,6 +115,36 @@ impl<T: Transport, const SLOTS: usize> BluetoothManager<T, SLOTS> {
         }
     }
 
+    /// Helper method to add a device to the devices map
+    fn add_device(
+        &mut self,
+        addr: [u8; 6],
+        rssi: Option<i8>,
+        name: Option<[u8; 32]>,
+        class_of_device: Option<u32>,
+    ) {
+        let device = BluetoothDevice {
+            addr,
+            rssi,
+            name,
+            class_of_device,
+        };
+        self.devices.insert(device.addr, device).ok();
+    }
+
+    /// Helper method to parse a 3-byte class of device into a u32
+    fn parse_class_of_device(bytes: &[u8]) -> Option<u32> {
+        if bytes.len() >= 3 {
+            let mut value: u32 = 0;
+            for (i, &b) in bytes.iter().take(3).enumerate() {
+                value |= u32::from(b) << (i * 8);
+            }
+            Some(value)
+        } else {
+            None
+        }
+    }
+
     /// Process an API request
     async fn process_api_request(&mut self, request: ApiRequest) -> ApiResponse {
         match request {
@@ -172,22 +202,38 @@ impl<T: Transport, const SLOTS: usize> BluetoothManager<T, SLOTS> {
     /// Process HCI events
     fn process_hci_event(&mut self, event: &event::Event<'_>) {
         match *event {
-            event::Event::InquiryResult(ref _result) => {
+            event::Event::InquiryResult(ref result) => {
                 // Process discovery result
-                // Note: The InquiryResult has a raw format we need to parse properly
-                // Here's a simplified approach as the real implementation would need to interpret
-                // the RemainingBytes field correctly
+                // The InquiryResult has fields stored in RemainingBytes that we need to parse
+                // Format: num_responses followed by that many sets of fields
 
-                // This is just a placeholder to show the concept
-                // In a real implementation, you would need to parse the BD_ADDR from the result
-                let addr = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]; // Placeholder
-                let device = BluetoothDevice {
-                    addr,
-                    rssi: None,
-                    name: None,
-                    class_of_device: Some(0x0000_1F00), // Placeholder
-                };
-                self.devices.insert(device.addr, device).ok();
+                // Get the number of responses in this event
+                let num_responses = result.num_responses;
+
+                // Each BD_ADDR is 6 bytes, so we need to parse each one
+                // RemainingBytes implements Deref to &[u8], so we can use it directly
+                let bd_addr_bytes = &*result.bd_addr;
+                let class_of_device_bytes = &*result.class_of_device;
+
+                // Parse each response (only if we have enough data)
+                for i in 0..num_responses as usize {
+                    // Each BD_ADDR is 6 bytes
+                    if i * 6 + 6 <= bd_addr_bytes.len() {
+                        // Extract the 6 bytes for this device's address
+                        let mut addr = [0u8; 6];
+                        addr.copy_from_slice(&bd_addr_bytes[i * 6..(i * 6 + 6)]);
+
+                        // Parse class of device (3 bytes per device)
+                        let class_of_device = if i * 3 + 3 <= class_of_device_bytes.len() {
+                            Self::parse_class_of_device(&class_of_device_bytes[i * 3..(i * 3 + 3)])
+                        } else {
+                            None
+                        };
+
+                        // Add the device to our map
+                        self.add_device(addr, None, None, class_of_device);
+                    }
+                }
             }
             event::Event::InquiryComplete(ref complete) => {
                 // Discovery complete
@@ -217,18 +263,81 @@ impl<T: Transport, const SLOTS: usize> BluetoothManager<T, SLOTS> {
             event::Event::RemoteNameRequestComplete(ref complete) => {
                 // Update device name if found
                 // Get the device using the BD_ADDR
-                // We need to get the raw bytes from BdAddr
                 let bd_addr_bytes = complete.bd_addr.raw();
                 let mut addr = [0u8; 6];
                 addr.copy_from_slice(bd_addr_bytes);
 
-                if let Some(device) = self.devices.get_mut(&addr) {
-                    if complete.status.to_result().is_ok() {
+                if complete.status.to_result().is_ok() {
+                    // If we have the device already
+                    if let Some(device) = self.devices.get_mut(&addr) {
                         // Convert the bytes to a name array
                         let mut name = [0u8; 32];
                         let name_len = core::cmp::min(complete.remote_name.len(), 32);
                         name[..name_len].copy_from_slice(&complete.remote_name[..name_len]);
                         device.name = Some(name);
+                    } else {
+                        // If this is a new device we haven't seen before
+                        // Create a new device entry with the name
+                        let mut name = [0u8; 32];
+                        let name_len = core::cmp::min(complete.remote_name.len(), 32);
+                        name[..name_len].copy_from_slice(&complete.remote_name[..name_len]);
+
+                        // Add the device with just the name (no RSSI or class of device yet)
+                        self.add_device(addr, None, Some(name), None);
+                    }
+                }
+            }
+            event::Event::ExtendedInquiryResult(ref result) => {
+                // The ExtendedInquiryResult gives us more info, including RSSI and EIR data
+                // It's easier to parse because fields are not in RemainingBytes format
+
+                // Get the BD_ADDR directly from the result
+                let addr = result.bd_addr;
+
+                // Parse class of device (3 bytes)
+                let class_of_device = Self::parse_class_of_device(&result.class_of_device);
+
+                // Add the device with RSSI
+                self.add_device(addr, Some(result.rssi), None, class_of_device);
+
+                // Note: EIR data can contain additional information like device name
+                // In a more complete implementation, we would parse this data
+                // to extract the device name and other details
+            }
+            event::Event::InquiryResultWithRssi(ref result) => {
+                // Process inquiry result with RSSI
+                // Similar to InquiryResult but includes RSSI values
+
+                let num_responses = result.num_responses;
+
+                // Get the byte arrays from RemainingBytes
+                let bd_addr_bytes = &*result.bd_addr;
+                let rssi_bytes = &*result.rssi;
+                let class_of_device_bytes = &*result.class_of_device;
+
+                for i in 0..num_responses as usize {
+                    // Each BD_ADDR is 6 bytes
+                    if i * 6 + 6 <= bd_addr_bytes.len() && i < rssi_bytes.len() {
+                        // Extract the 6 bytes for this device's address
+                        let mut addr = [0u8; 6];
+                        addr.copy_from_slice(&bd_addr_bytes[i * 6..(i * 6 + 6)]);
+
+                        // Extract RSSI
+                        // Note: RSSI is stored as a signed 8-bit value in the HCI spec
+                        // This cast may technically wrap, but in the Bluetooth context
+                        // it's the expected behavior as RSSI is always interpreted as a signed value
+                        #[allow(clippy::cast_possible_wrap)]
+                        let rssi = rssi_bytes[i] as i8;
+
+                        // Parse class of device (3 bytes per device)
+                        let class_of_device = if i * 3 + 3 <= class_of_device_bytes.len() {
+                            Self::parse_class_of_device(&class_of_device_bytes[i * 3..(i * 3 + 3)])
+                        } else {
+                            None
+                        };
+
+                        // Add the device to our map
+                        self.add_device(addr, Some(rssi), None, class_of_device);
                     }
                 }
             }
