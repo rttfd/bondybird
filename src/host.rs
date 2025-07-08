@@ -91,7 +91,6 @@ use heapless::Vec;
 /// - Structured event parsing and handling
 /// - Transport-agnostic controller communication
 impl BluetoothHost {
-    /// Helper method to parse a 3-byte class of device into a u32
     fn parse_class_of_device(bytes: &[u8]) -> Option<u32> {
         if bytes.len() >= 3 {
             let mut value: u32 = 0;
@@ -104,7 +103,6 @@ impl BluetoothHost {
         }
     }
 
-    /// Helper method to convert `CoreSpecificationVersion` to u8
     fn core_spec_version_to_u8(version: bt_hci::param::CoreSpecificationVersion) -> u8 {
         match version {
             bt_hci::param::CoreSpecificationVersion::VERSION_1_1 => 0x01,
@@ -183,15 +181,14 @@ impl BluetoothHost {
         }
     }
 
-    /// Start device discovery
     async fn start_discovery<T: Transport + 'static, const SLOTS: usize>(
         &mut self,
         controller: &ExternalController<T, SLOTS>,
     ) -> Result<(), BluetoothError> {
         let inquiry_cmd = bt_hci::cmd::link_control::Inquiry::new(
-            constants::GIAC,                     // GIAC
-            constants::DEFAULT_INQUIRY_DURATION, // Inquiry duration
-            constants::UNLIMITED_RESPONSES,      // Unlimited responses
+            constants::GIAC,
+            constants::DEFAULT_INQUIRY_DURATION,
+            constants::UNLIMITED_RESPONSES,
         );
 
         controller
@@ -199,91 +196,72 @@ impl BluetoothHost {
             .await
             .map_err(|_| BluetoothError::DiscoveryFailed)?;
 
-        // Set the state to discovering
         self.state = BluetoothState::Discovering;
         Ok(())
     }
 
-    /// Stop device discovery
     async fn stop_discovery<T: Transport + 'static, const SLOTS: usize>(
         &mut self,
-        _controller: &ExternalController<T, SLOTS>,
+        controller: &ExternalController<T, SLOTS>,
     ) -> Result<(), BluetoothError> {
-        // Note: The InquiryCancel command (opcode 0x0002) is defined in the Bluetooth Core
-        // Specification, but doesn't seem to be implemented in our bt-hci library.
-        // In a real implementation, we would send:
-        // let inquiry_cancel = cmd::link_control::InquiryCancel::new();
+        let inquiry_cancel = cmd::link_control::InquiryCancel::new();
 
-        // For now, we'll just set the state directly
-        // This works because the HCI event loop will receive an InquiryComplete
-        // event when the inquiry is stopped or times out
+        controller
+            .exec(&inquiry_cancel)
+            .await
+            .map_err(|_| BluetoothError::HciError)?;
+
         self.state = BluetoothState::PoweredOn;
         Ok(())
     }
 
-    /// Connect to a device
     async fn connect_device<T: Transport + 'static, const SLOTS: usize>(
         &mut self,
         addr: BluetoothAddress,
         controller: &ExternalController<T, SLOTS>,
     ) -> Result<(), BluetoothError> {
-        // Check if the device exists in our discovered devices
         if !self.devices.contains_key(&addr) {
             return Err(BluetoothError::DeviceNotFound);
         }
 
-        // Create the connection request with individual parameters
-        // Note: We're providing the parameters directly to the new() function
-        // This is how the bt-hci API expects commands to be constructed
         let create_conn = cmd::link_control::CreateConnection::new(
-            bt_hci::param::BdAddr::new(addr.0),      // BD_ADDR
-            constants::DEFAULT_PACKET_TYPES,         // Packet type (DM1, DM3, DM5, DH1, DH3, DH5)
-            constants::PAGE_SCAN_REPETITION_MODE_R1, // Page scan repetition mode (R1)
-            constants::RESERVED_FIELD,               // Reserved
-            constants::NO_CLOCK_OFFSET,              // Clock offset (none)
-            constants::ALLOW_ROLE_SWITCH,            // Allow role switch
+            addr.into(),
+            constants::DEFAULT_PACKET_TYPES,
+            constants::PAGE_SCAN_REPETITION_MODE_R1,
+            constants::RESERVED_FIELD,
+            constants::NO_CLOCK_OFFSET,
+            constants::ALLOW_ROLE_SWITCH,
         );
 
-        match controller.exec(&create_conn).await {
-            Ok(()) => {
-                // The connection will be confirmed by a ConnectionComplete event
-                // For now, we'll set the state to connecting
-                self.state = BluetoothState::Connecting;
-                Ok(())
-            }
-            Err(_) => Err(BluetoothError::ConnectionFailed),
+        if controller.exec(&create_conn).await.is_ok() {
+            self.state = BluetoothState::Connecting;
+            Ok(())
+        } else {
+            Err(BluetoothError::ConnectionFailed)
         }
     }
 
-    /// Disconnect from a device
     async fn disconnect_device<T: Transport + 'static, const SLOTS: usize>(
         &mut self,
         addr: BluetoothAddress,
         controller: &ExternalController<T, SLOTS>,
     ) -> Result<(), BluetoothError> {
-        // Get the connection handle for this device address from our connections map
         let conn_handle = match self.connections.get(&addr) {
             Some(handle) => bt_hci::param::ConnHandle::new(*handle),
             None => return Err(BluetoothError::DeviceNotConnected),
         };
 
-        // Specify the reason for disconnection
         let disconnect_reason = bt_hci::param::DisconnectReason::RemoteUserTerminatedConn;
 
-        // Create and send the disconnect command
         let disconnect = cmd::link_control::Disconnect::new(conn_handle, disconnect_reason);
 
-        match controller.exec(&disconnect).await {
-            Ok(()) => {
-                // The disconnection will be confirmed by a DisconnectionComplete event
-                // The actual device state update and connections map update will happen there
-                Ok(())
-            }
-            Err(_) => Err(BluetoothError::HciError),
+        if controller.exec(&disconnect).await.is_ok() {
+            Ok(())
+        } else {
+            Err(BluetoothError::HciError)
         }
     }
 
-    /// Parse address string to bytes
     fn parse_address(address: &str) -> Result<BluetoothAddress, BluetoothError> {
         // Parse addresses in the format "XX:XX:XX:XX:XX:XX" or "XX-XX-XX-XX-XX-XX"
         let mut addr = [0u8; 6];
@@ -405,29 +383,13 @@ impl BluetoothHost {
             .await
             .map_err(|_| BluetoothError::HciError)?;
 
-        // The return value is the BdAddr directly
-        let bd_addr_bytes = bd_addr.raw();
-        if let Some(addr) = Self::extract_bd_addr(bd_addr_bytes) {
-            self.local_info.bd_addr = Some(addr);
-        }
+        self.local_info.bd_addr = bd_addr.try_into().ok();
 
         // Mark controller as ready
         self.state = BluetoothState::PoweredOn;
         Ok(())
     }
 
-    /// Helper method to extract `BD_ADDR` from a byte slice
-    fn extract_bd_addr(bytes: &[u8]) -> Option<BluetoothAddress> {
-        if bytes.len() >= constants::BD_ADDR_LENGTH {
-            let mut addr = [0u8; constants::BD_ADDR_LENGTH];
-            addr.copy_from_slice(&bytes[..constants::BD_ADDR_LENGTH]);
-            Some(BluetoothAddress::new(addr))
-        } else {
-            None
-        }
-    }
-
-    /// Helper method to safely copy a name with proper bounds checking
     fn copy_device_name(source: &[u8]) -> [u8; constants::MAX_DEVICE_NAME_LENGTH] {
         let mut name = [0u8; constants::MAX_DEVICE_NAME_LENGTH];
         let name_len = core::cmp::min(source.len(), constants::MAX_DEVICE_NAME_LENGTH);
@@ -435,10 +397,7 @@ impl BluetoothHost {
         name
     }
 
-    /// Helper method to remove connections by handle
     fn remove_connections_by_handle(&mut self, conn_handle: u16) {
-        // Find the device address associated with this connection handle
-        // and remove it from our connections map
         let keys_to_remove: Vec<BluetoothAddress, { constants::MAX_CLEANUP_ENTRIES }> = self
             .connections
             .iter()
@@ -451,16 +410,11 @@ impl BluetoothHost {
             })
             .collect();
 
-        // Remove each matching connection
         for addr in keys_to_remove {
             self.connections.remove(&addr);
         }
     }
 
-    /// Helper method to add or update a device in the devices map
-    ///
-    /// If a device with the same address already exists, this method will update
-    /// its properties with any new non-None values provided.
     fn add_or_update_device(
         &mut self,
         addr: BluetoothAddress,
@@ -469,7 +423,6 @@ impl BluetoothHost {
         class_of_device: Option<u32>,
     ) {
         if let Some(existing_device) = self.devices.get_mut(&addr) {
-            // Update existing device with new information
             if rssi.is_some() {
                 existing_device.rssi = rssi;
             }
@@ -480,7 +433,6 @@ impl BluetoothHost {
                 existing_device.class_of_device = class_of_device;
             }
         } else {
-            // Create new device entry
             let device = BluetoothDevice {
                 addr,
                 rssi,
@@ -498,19 +450,11 @@ impl BluetoothHost {
     pub fn process_hci_event(&mut self, event: &event::Event<'_>) {
         match *event {
             event::Event::InquiryResult(ref result) => {
-                // Process discovery result
-                // The InquiryResult has fields stored in RemainingBytes that we need to parse
-                // Format: num_responses followed by that many sets of fields
-
-                // Get the number of responses in this event
                 let num_responses = result.num_responses;
 
-                // Each BD_ADDR is 6 bytes, so we need to parse each one
-                // RemainingBytes implements Deref to &[u8], so we can use it directly
                 let bd_addr_bytes = &*result.bd_addr;
                 let class_of_device_bytes = &*result.class_of_device;
 
-                // Parse each response (only if we have enough data)
                 for i in 0..num_responses as usize {
                     // Each BD_ADDR is 6 bytes
                     if i * 6 + 6 <= bd_addr_bytes.len() {
@@ -526,40 +470,31 @@ impl BluetoothHost {
                             None
                         };
 
-                        // Add the device to our map
                         self.add_or_update_device(addr, None, None, class_of_device);
                     }
                 }
             }
             event::Event::InquiryComplete(ref complete) => {
-                // Discovery complete
                 self.discovering = false;
                 if complete.status.to_result().is_ok() {
                     self.state = BluetoothState::PoweredOn;
                 }
-                // If status is not Success, we should handle the error
             }
             event::Event::ConnectionComplete(ref complete) => {
-                // Connection complete
                 if complete.status.to_result().is_ok() {
-                    let bd_addr_bytes = complete.bd_addr.raw();
-                    if let Some(addr) = Self::extract_bd_addr(bd_addr_bytes) {
+                    if let Ok(addr) = complete.bd_addr.try_into() {
                         // Store the connection handle for this device
                         let conn_handle = complete.handle.raw();
                         self.connections.insert(addr, conn_handle).ok();
 
-                        // Update the state
                         self.state = BluetoothState::Connected;
                     }
                 } else {
-                    // Handle connection failure
                     self.state = BluetoothState::PoweredOn;
                 }
             }
             event::Event::DisconnectionComplete(ref complete) => {
-                // Disconnection complete
                 if complete.status.to_result().is_ok() {
-                    // Get the connection handle from the event
                     let conn_handle = complete.handle.raw();
 
                     // Remove the connection from our map
@@ -567,26 +502,18 @@ impl BluetoothHost {
 
                     self.state = BluetoothState::PoweredOn;
                 }
-                // Even if disconnection failed, we'll set the state to PoweredOn
-                // since we're no longer connected
             }
             event::Event::RemoteNameRequestComplete(ref complete) => {
                 // Update device name if found
                 if complete.status.to_result().is_ok() {
-                    let bd_addr_bytes = complete.bd_addr.raw();
-                    if let Some(addr) = Self::extract_bd_addr(bd_addr_bytes) {
+                    if let Ok(addr) = complete.bd_addr.try_into() {
                         let name = Self::copy_device_name(&complete.remote_name);
 
-                        // Add or update the device with the name
                         self.add_or_update_device(addr, None, Some(name), None);
                     }
                 }
             }
             event::Event::ExtendedInquiryResult(ref result) => {
-                // The ExtendedInquiryResult gives us more info, including RSSI and EIR data
-                // It's easier to parse because fields are not in RemainingBytes format
-
-                // Get the BD_ADDR directly from the result
                 let addr = BluetoothAddress::new(result.bd_addr);
 
                 // Parse class of device (3 bytes)
@@ -594,18 +521,10 @@ impl BluetoothHost {
 
                 // Add the device with RSSI
                 self.add_or_update_device(addr, Some(result.rssi), None, class_of_device);
-
-                // Note: EIR data can contain additional information like device name
-                // In a more complete implementation, we would parse this data
-                // to extract the device name and other details
             }
             event::Event::InquiryResultWithRssi(ref result) => {
-                // Process inquiry result with RSSI
-                // Similar to InquiryResult but includes RSSI values
-
                 let num_responses = result.num_responses;
 
-                // Get the byte arrays from RemainingBytes
                 let bd_addr_bytes = &*result.bd_addr;
                 let rssi_bytes = &*result.rssi;
                 let class_of_device_bytes = &*result.class_of_device;
@@ -618,10 +537,6 @@ impl BluetoothHost {
                         addr_bytes.copy_from_slice(&bd_addr_bytes[i * 6..(i * 6 + 6)]);
                         let addr = BluetoothAddress::new(addr_bytes);
 
-                        // Extract RSSI
-                        // Note: RSSI is stored as a signed 8-bit value in the HCI spec
-                        // This cast may technically wrap, but in the Bluetooth context
-                        // it's the expected behavior as RSSI is always interpreted as a signed value
                         #[allow(clippy::cast_possible_wrap)]
                         let rssi = rssi_bytes[i] as i8;
 
@@ -632,13 +547,12 @@ impl BluetoothHost {
                             None
                         };
 
-                        // Add the device to our map
                         self.add_or_update_device(addr, Some(rssi), None, class_of_device);
                     }
                 }
             }
-            event::Event::CommandComplete(_) | event::Event::CommandStatus(_) | _ => {
-                // Handle other events if needed
+            _ => {
+                defmt::debug!("Unhandled HCI event: {:?}", defmt::Debug2Format(event));
             }
         }
     }
