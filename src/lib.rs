@@ -96,6 +96,34 @@ impl From<BluetoothAddress> for [u8; 6] {
     }
 }
 
+impl From<BluetoothAddress> for bt_hci::param::BdAddr {
+    fn from(addr: BluetoothAddress) -> Self {
+        bt_hci::param::BdAddr::new(addr.0)
+    }
+}
+
+impl TryFrom<&[u8]> for BluetoothAddress {
+    type Error = BluetoothError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        if bytes.len() == 6 {
+            let mut addr = [0u8; 6];
+            addr.copy_from_slice(bytes);
+            Ok(BluetoothAddress(addr))
+        } else {
+            Err(BluetoothError::InvalidParameter)
+        }
+    }
+}
+
+impl TryFrom<bt_hci::param::BdAddr> for BluetoothAddress {
+    type Error = BluetoothError;
+
+    fn try_from(bd_addr: bt_hci::param::BdAddr) -> Result<Self, Self::Error> {
+        bd_addr.raw().try_into()
+    }
+}
+
 /// Represents a discovered Bluetooth device with its properties
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BluetoothDevice {
