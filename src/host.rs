@@ -179,6 +179,7 @@ impl BluetoothHost {
                 Err(e) => Response::Error(e),
             },
             Request::GetState => Response::State(self.state),
+            Request::GetLocalInfo => Response::LocalInfo(self.local_info),
         }
     }
 
