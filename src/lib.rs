@@ -49,7 +49,7 @@ pub(crate) static BLUETOOTH_HOST: Mutex<CriticalSectionRawMutex, BluetoothHost> 
     });
 
 /// A Bluetooth Device Address (`BD_ADDR`) wrapper for type safety
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BluetoothAddress(pub [u8; 6]);
 
 impl BluetoothAddress {
@@ -97,7 +97,7 @@ impl From<BluetoothAddress> for [u8; 6] {
 }
 
 /// Represents a discovered Bluetooth device with its properties
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BluetoothDevice {
     /// Bluetooth device address (`BD_ADDR`)
     pub addr: BluetoothAddress,
@@ -144,7 +144,7 @@ impl BluetoothDevice {
 }
 
 /// Local device information collected during initialization
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct LocalDeviceInfo {
     /// Local Bluetooth device address
     pub bd_addr: Option<BluetoothAddress>,
