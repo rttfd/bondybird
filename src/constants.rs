@@ -51,3 +51,101 @@ pub const MAX_DISCOVERED_DEVICES: usize = 8;
 
 /// Size of the buffer used for HCI event processing
 pub const EVENT_BUFFER_SIZE: usize = 255;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_channel_constants() {
+        assert_eq!(MAX_CHANNELS, 8);
+        assert!(MAX_CHANNELS > 0);
+        assert!(MAX_CHANNELS <= 255); // Should be reasonable
+    }
+
+    #[test]
+    fn test_giac_constant() {
+        assert_eq!(GIAC.len(), 3);
+        assert_eq!(GIAC, [0x9E, 0x8B, 0x33]);
+    }
+
+    #[test]
+    fn test_inquiry_constants() {
+        assert_eq!(DEFAULT_INQUIRY_DURATION, 0x30);
+        assert!(DEFAULT_INQUIRY_DURATION > 0);
+        assert_eq!(UNLIMITED_RESPONSES, 0);
+    }
+
+    #[test]
+    fn test_packet_types_constant() {
+        assert_eq!(DEFAULT_PACKET_TYPES, 0xCC18);
+        // Verify it's a valid packet type value
+        assert!(DEFAULT_PACKET_TYPES > 0);
+    }
+
+    #[test]
+    fn test_page_scan_constants() {
+        assert_eq!(PAGE_SCAN_REPETITION_MODE_R1, 0x01);
+        assert_eq!(RESERVED_FIELD, 0x00);
+        assert_eq!(NO_CLOCK_OFFSET, 0x0000);
+    }
+
+    #[test]
+    fn test_role_switch_constant() {
+        assert_eq!(ALLOW_ROLE_SWITCH, 0x01);
+    }
+
+    #[test]
+    fn test_device_constants() {
+        assert_eq!(MAX_DEVICE_NAME_LENGTH, 32);
+        assert_eq!(BD_ADDR_LENGTH, 6);
+        assert_eq!(CLASS_OF_DEVICE_LENGTH, 3);
+
+        // Ensure reasonable values
+        assert!(MAX_DEVICE_NAME_LENGTH > 0);
+        assert!(BD_ADDR_LENGTH == 6); // Bluetooth standard
+        assert!(CLASS_OF_DEVICE_LENGTH == 3); // Bluetooth standard
+    }
+
+    #[test]
+    fn test_connection_constants() {
+        assert_eq!(MAX_CONNECTIONS, 4);
+        assert_eq!(MAX_DISCOVERED_DEVICES, 8);
+        assert_eq!(MAX_CLEANUP_ENTRIES, 8);
+
+        // Ensure reasonable values
+        assert!(MAX_CONNECTIONS > 0);
+        assert!(MAX_DISCOVERED_DEVICES > 0);
+        assert!(MAX_CLEANUP_ENTRIES > 0);
+
+        // Ensure cleanup entries is sufficient for connections
+        assert!(MAX_CLEANUP_ENTRIES >= MAX_CONNECTIONS);
+    }
+
+    #[test]
+    fn test_buffer_constants() {
+        assert_eq!(EVENT_BUFFER_SIZE, 255);
+        assert!(EVENT_BUFFER_SIZE > 0);
+        assert!(EVENT_BUFFER_SIZE <= 255); // HCI event max size
+    }
+
+    #[test]
+    fn test_constants_consistency() {
+        // Test that constants make sense in relation to each other
+        assert!(MAX_DISCOVERED_DEVICES >= MAX_CONNECTIONS);
+        assert!(MAX_CHANNELS >= MAX_CONNECTIONS);
+        assert!(EVENT_BUFFER_SIZE >= BD_ADDR_LENGTH);
+        assert!(MAX_DEVICE_NAME_LENGTH <= EVENT_BUFFER_SIZE);
+    }
+
+    #[test]
+    fn test_bluetooth_standard_compliance() {
+        // Test that our constants comply with Bluetooth standards
+        assert_eq!(BD_ADDR_LENGTH, 6); // Bluetooth BD_ADDR is always 6 bytes
+        assert_eq!(CLASS_OF_DEVICE_LENGTH, 3); // CoD is always 3 bytes
+        assert_eq!(EVENT_BUFFER_SIZE, 255); // Max HCI event size
+
+        // GIAC should be the standard General Inquiry Access Code
+        assert_eq!(GIAC, [0x9E, 0x8B, 0x33]);
+    }
+}
