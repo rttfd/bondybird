@@ -57,8 +57,8 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      # - name: 🧪 Run tests
-      #   run: cargo test --all-features
+      - name: 🧪 Run tests
+        run: cargo test --all-features
 
   check-crates-published:
     name: 🔍 Check if Version Already Published

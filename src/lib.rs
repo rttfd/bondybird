@@ -8,10 +8,10 @@
     clippy::too_many_lines
 )]
 
-mod api;
+pub mod api;
 pub mod constants;
-mod host;
-mod processor;
+pub mod host;
+pub mod processor;
 
 use constants::{MAX_CHANNELS, MAX_DISCOVERED_DEVICES};
 use embassy_sync::channel::Channel;
@@ -257,6 +257,37 @@ pub struct BluetoothHost {
     discovering: bool,
 }
 
+impl Default for BluetoothHost {
+    fn default() -> Self {
+        Self {
+            state: BluetoothState::PoweredOff,
+            devices: FnvIndexMap::new(),
+            connections: FnvIndexMap::new(),
+            local_info: LocalDeviceInfo {
+                bd_addr: None,
+                hci_version: None,
+                hci_revision: None,
+                lmp_version: None,
+                manufacturer_name: None,
+                lmp_subversion: None,
+                local_features: None,
+                acl_data_packet_length: None,
+                sco_data_packet_length: None,
+                total_num_acl_data_packets: None,
+                total_num_sco_data_packets: None,
+            },
+            discovering: false,
+        }
+    }
+}
+
+impl BluetoothHost {
+    /// Create a new BluetoothHost with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 /// API requests sent to the Bluetooth processing tasks
 #[derive(Debug, Clone)]
 pub enum Request {
@@ -295,4 +326,302 @@ pub enum Response {
     LocalInfo(LocalDeviceInfo),
     /// Error occurred
     Error(BluetoothError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bluetooth_address_creation() {
+        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+        assert_eq!(addr.as_bytes(), &[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+    }
+
+    #[test]
+    fn test_bluetooth_address_format_hex() {
+        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+        let formatted = addr.format_hex();
+        assert_eq!(formatted.as_str(), "12:34:56:78:9A:BC");
+    }
+
+    #[test]
+    fn test_bluetooth_address_format_hex_edge_cases() {
+        // Test zero address
+        let addr_zero = BluetoothAddress::new([0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(addr_zero.format_hex().as_str(), "00:00:00:00:00:00");
+
+        // Test max address
+        let addr_max = BluetoothAddress::new([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+        assert_eq!(addr_max.format_hex().as_str(), "FF:FF:FF:FF:FF:FF");
+
+        // Test mixed case
+        let addr_mixed = BluetoothAddress::new([0x0A, 0xB1, 0x2C, 0xD3, 0x4E, 0xF5]);
+        assert_eq!(addr_mixed.format_hex().as_str(), "0A:B1:2C:D3:4E:F5");
+    }
+
+    #[test]
+    fn test_bluetooth_address_conversions() {
+        let bytes = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC];
+
+        // Test From<[u8; 6]>
+        let addr: BluetoothAddress = bytes.into();
+        assert_eq!(addr.as_bytes(), &bytes);
+
+        // Test Into<[u8; 6]>
+        let converted_bytes: [u8; 6] = addr.into();
+        assert_eq!(converted_bytes, bytes);
+    }
+
+    #[test]
+    fn test_bluetooth_address_try_from_slice() {
+        // Test valid slice
+        let bytes = &[0x12u8, 0x34u8, 0x56u8, 0x78u8, 0x9Au8, 0xBCu8][..];
+        let addr = BluetoothAddress::try_from(bytes).unwrap();
+        assert_eq!(addr.as_bytes(), &[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+
+        // Test invalid lengths
+        let bytes_short = &[0x12u8, 0x34u8, 0x56u8][..];
+        let bytes_long = &[
+            0x12u8, 0x34u8, 0x56u8, 0x78u8, 0x9Au8, 0xBCu8, 0xDEu8, 0xF0u8,
+        ][..];
+
+        assert!(BluetoothAddress::try_from(bytes_short).is_err());
+        assert!(BluetoothAddress::try_from(bytes_long).is_err());
+    }
+
+    #[test]
+    fn test_bluetooth_device_creation() {
+        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+        let device = BluetoothDevice::new(addr);
+
+        assert_eq!(device.addr, addr);
+        assert_eq!(device.rssi, None);
+        assert_eq!(device.name, None);
+        assert_eq!(device.class_of_device, None);
+    }
+
+    #[test]
+    fn test_bluetooth_device_builder_pattern() {
+        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+        let name = [
+            b'T', b'e', b's', b't', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let device = BluetoothDevice::new(addr)
+            .with_rssi(-50)
+            .with_name(name)
+            .with_class_of_device(0x240404);
+
+        assert_eq!(device.addr, addr);
+        assert_eq!(device.rssi, Some(-50));
+        assert_eq!(device.name, Some(name));
+        assert_eq!(device.class_of_device, Some(0x240404));
+    }
+
+    #[test]
+    fn test_bluetooth_device_rssi_values() {
+        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+
+        // Test various RSSI values
+        let device_weak = BluetoothDevice::new(addr).with_rssi(-80);
+        let device_medium = BluetoothDevice::new(addr).with_rssi(-50);
+        let device_strong = BluetoothDevice::new(addr).with_rssi(-20);
+
+        assert_eq!(device_weak.rssi, Some(-80));
+        assert_eq!(device_medium.rssi, Some(-50));
+        assert_eq!(device_strong.rssi, Some(-20));
+    }
+
+    #[test]
+    fn test_bluetooth_device_class_of_device() {
+        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+
+        // Test various device classes based on Bluetooth standards
+        let audio_device = BluetoothDevice::new(addr).with_class_of_device(0x240404); // Audio: Headphones
+        let phone_device = BluetoothDevice::new(addr).with_class_of_device(0x200404); // Phone: Smartphone  
+        let computer_device = BluetoothDevice::new(addr).with_class_of_device(0x100104); // Computer: Desktop
+
+        assert_eq!(audio_device.class_of_device, Some(0x240404));
+        assert_eq!(phone_device.class_of_device, Some(0x200404));
+        assert_eq!(computer_device.class_of_device, Some(0x100104));
+    }
+
+    #[test]
+    fn test_bluetooth_device_name_handling() {
+        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+
+        // Test with various name lengths
+        let short_name = [
+            b'H', b'i', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+        ];
+        let full_name = [b'T'; 32]; // Full 32-byte name
+        let empty_name = [0u8; 32]; // Empty name
+
+        let device_short = BluetoothDevice::new(addr).with_name(short_name);
+        let device_full = BluetoothDevice::new(addr).with_name(full_name);
+        let device_empty = BluetoothDevice::new(addr).with_name(empty_name);
+
+        assert_eq!(device_short.name, Some(short_name));
+        assert_eq!(device_full.name, Some(full_name));
+        assert_eq!(device_empty.name, Some(empty_name));
+    }
+
+    #[test]
+    fn test_local_device_info_default() {
+        let info = LocalDeviceInfo::default();
+
+        assert_eq!(info.bd_addr, None);
+        assert_eq!(info.hci_version, None);
+        assert_eq!(info.hci_revision, None);
+        assert_eq!(info.lmp_version, None);
+        assert_eq!(info.manufacturer_name, None);
+        assert_eq!(info.lmp_subversion, None);
+        assert_eq!(info.local_features, None);
+        assert_eq!(info.acl_data_packet_length, None);
+        assert_eq!(info.sco_data_packet_length, None);
+        assert_eq!(info.total_num_acl_data_packets, None);
+        assert_eq!(info.total_num_sco_data_packets, None);
+    }
+
+    #[test]
+    fn test_local_device_info_populated() {
+        let addr = BluetoothAddress::new([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        let features = [0xFF, 0xFE, 0xCD, 0xFE, 0xDB, 0xFF, 0x7B, 0x87];
+
+        let info = LocalDeviceInfo {
+            bd_addr: Some(addr),
+            hci_version: Some(0x0C), // Bluetooth 5.2
+            hci_revision: Some(0x1234),
+            lmp_version: Some(0x0C),
+            manufacturer_name: Some(0x000F), // Broadcom
+            lmp_subversion: Some(0x5678),
+            local_features: Some(features),
+            acl_data_packet_length: Some(1021),
+            sco_data_packet_length: Some(64),
+            total_num_acl_data_packets: Some(8),
+            total_num_sco_data_packets: Some(8),
+        };
+
+        assert_eq!(info.bd_addr, Some(addr));
+        assert_eq!(info.hci_version, Some(0x0C));
+        assert_eq!(info.manufacturer_name, Some(0x000F));
+        assert_eq!(info.acl_data_packet_length, Some(1021));
+        assert_eq!(info.local_features, Some(features));
+    }
+
+    #[test]
+    fn test_bluetooth_state_exhaustive() {
+        // Test that all BluetoothState variants exist and can be matched
+        let states = [
+            BluetoothState::PoweredOff,
+            BluetoothState::PoweredOn,
+            BluetoothState::Discovering,
+            BluetoothState::Connecting,
+            BluetoothState::Connected,
+        ];
+
+        for state in states {
+            match state {
+                BluetoothState::PoweredOff => assert!(true),
+                BluetoothState::PoweredOn => assert!(true),
+                BluetoothState::Discovering => assert!(true),
+                BluetoothState::Connecting => assert!(true),
+                BluetoothState::Connected => assert!(true),
+            }
+        }
+    }
+
+    #[test]
+    fn test_bluetooth_error_exhaustive() {
+        // Test that all BluetoothError variants exist and implement required traits
+        let errors = [
+            BluetoothError::HciError,
+            BluetoothError::DeviceNotFound,
+            BluetoothError::DeviceNotConnected,
+            BluetoothError::ConnectionFailed,
+            BluetoothError::Timeout,
+            BluetoothError::AlreadyInProgress,
+            BluetoothError::InvalidParameter,
+            BluetoothError::NotSupported,
+            BluetoothError::DiscoveryFailed,
+            BluetoothError::InitializationFailed,
+            BluetoothError::TransportError,
+            BluetoothError::InvalidState,
+        ];
+
+        for error in errors {
+            // Test that Debug trait is implemented
+            let _ = &error as &dyn core::fmt::Debug;
+
+            // Test that Copy and Clone are implemented
+            let _cloned = error;
+            let _copied = error;
+
+            // Test that PartialEq is implemented
+            assert_eq!(error, error);
+        }
+    }
+
+    #[test]
+    fn test_bluetooth_host_initialization() {
+        // The BluetoothHost is initialized as a static, so we can't create new instances easily
+        // But we can test that the static is properly initialized
+        // This is more of a compilation test
+        let _host_ref = &BLUETOOTH_HOST;
+    }
+
+    #[test]
+    fn test_channels_initialization() {
+        // Test that the static channels exist and have correct types
+        let _request_sender = REQUEST_CHANNEL.sender();
+        let _request_receiver = REQUEST_CHANNEL.receiver();
+        let _response_sender = RESPONSE_CHANNEL.sender();
+        let _response_receiver = RESPONSE_CHANNEL.receiver();
+    }
+
+    #[test]
+    fn test_type_traits() {
+        // Test that types implement expected traits
+        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+        let device = BluetoothDevice::new(addr);
+        let info = LocalDeviceInfo::default();
+
+        // Test Debug
+        let _ = &addr as &dyn core::fmt::Debug;
+        let _ = &device as &dyn core::fmt::Debug;
+        let _ = &info as &dyn core::fmt::Debug;
+
+        // Test Clone/Copy for address
+        let _addr_clone = addr;
+        let _addr_copy = addr;
+
+        // Test Clone for device
+        let _device_clone = device.clone();
+
+        // Test PartialEq for address
+        assert_eq!(addr, addr);
+
+        // Test Hash for address (it's used in FnvIndexMap)
+        use core::hash::{Hash, Hasher};
+
+        // Create a simple hasher to test Hash implementation
+        struct TestHasher(u64);
+        impl Hasher for TestHasher {
+            fn finish(&self) -> u64 {
+                self.0
+            }
+            fn write(&mut self, bytes: &[u8]) {
+                for &byte in bytes {
+                    self.0 = self.0.wrapping_mul(31).wrapping_add(byte as u64);
+                }
+            }
+        }
+
+        let mut hasher = TestHasher(0);
+        addr.hash(&mut hasher);
+        let _hash = hasher.finish();
+    }
 }
