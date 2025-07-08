@@ -244,6 +244,8 @@ pub enum Request {
     Disconnect(String<64>),
     /// Get current Bluetooth state
     GetState,
+    /// Get local Bluetooth information
+    GetLocalInfo,
 }
 
 /// API responses sent back from the Bluetooth processing tasks
@@ -261,6 +263,8 @@ pub enum Response {
     DisconnectComplete,
     /// Current Bluetooth state
     State(BluetoothState),
+    /// Local Bluetooth information
+    LocalInfo(LocalDeviceInfo),
     /// Error occurred
     Error(BluetoothError),
 }

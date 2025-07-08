@@ -27,8 +27,8 @@
 //! ```
 
 use crate::{
-    BluetoothDevice, BluetoothError, BluetoothState, REQUEST_CHANNEL, RESPONSE_CHANNEL, Request,
-    Response, constants::MAX_DISCOVERED_DEVICES,
+    BluetoothDevice, BluetoothError, BluetoothState, LocalDeviceInfo, REQUEST_CHANNEL,
+    RESPONSE_CHANNEL, Request, Response, constants::MAX_DISCOVERED_DEVICES,
 };
 use heapless::{String, Vec};
 
@@ -100,6 +100,20 @@ pub async fn get_state() -> Result<BluetoothState, BluetoothError> {
     REQUEST_CHANNEL.sender().send(Request::GetState).await;
     match RESPONSE_CHANNEL.receiver().receive().await {
         Response::State(state) => Ok(state),
+        Response::Error(e) => Err(e),
+        _ => Err(BluetoothError::HciError),
+    }
+}
+
+/// Get local Bluetooth information (e.g., device name, address).
+///
+/// # Errors
+///
+/// Returns an error if the command fails or the response is unexpected.
+pub async fn get_local_info() -> Result<LocalDeviceInfo, BluetoothError> {
+    REQUEST_CHANNEL.sender().send(Request::GetLocalInfo).await;
+    match RESPONSE_CHANNEL.receiver().receive().await {
+        Response::LocalInfo(info) => Ok(info),
         Response::Error(e) => Err(e),
         _ => Err(BluetoothError::HciError),
     }
