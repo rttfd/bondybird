@@ -4,123 +4,186 @@
 
 ![Dall-E generated bondybird image](https://raw.githubusercontent.com/rttfd/static/refs/heads/main/bondybird/bondybird.png)
 
-# BondyBird
+# `BondyBird`
 
-BondyBird is a BR/EDR (Classic) Bluetooth Host implementation for embedded systems, built on top of Embassy's async executor and designed for `no_std` environments. It provides a single-task, channel-based architecture that is both memory-efficient and easy to integrate with application code.
+`BondyBird` is a BR/EDR (Classic) Bluetooth Host implementation for embedded systems, built on top of Embassy and `bt-hci` crates and designed for `no_std` environments. It provides a **parallel task architecture** that separates HCI event processing from API command handling for optimal performance and responsiveness.
+
+## Key Features
+
+- 🚀 **Parallel Processing**: Separate tasks for HCI events and API requests
+- 🔒 **Thread-Safe**: Embassy mutex-based shared state management  
+- ⚡ **Low Latency**: Immediate HCI event processing without blocking
+- 📦 **Memory Efficient**: `no_std` compatible with heapless collections
+- 🛡️ **Type Safe**: Strong typing with newtype wrappers for addresses
+- 🔧 **Easy Integration**: Simple API with async/await support
 
 ## Architecture
 
-BondyBird uses a simplified architecture with:
+`BondyBird` uses a **parallel task architecture** that optimizes for performance and responsiveness:
 
-1. **Single Manager Task** - A single async task that handles all Bluetooth operations
-2. **Static Channels** - Embassy channels for communication between API functions and the manager
-3. **Direct HCI Integration** - Using the bt-hci library for controller communication
+1. **HCI Event Processor Task** - Dedicated task for processing incoming HCI events
+2. **API Request Processor Task** - Handles API requests and executes HCI commands
+3. **Shared State** - Thread-safe shared Bluetooth state using Embassy mutexes
+4. **Static Channels** - Embassy channels for communication between API functions and tasks
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  API Functions  │    │  API REQUEST     │    │                 │
-│                 │───▶│    CHANNEL       │───▶│                 │
-│                 │    └──────────────────┘    │   Bluetooth     │
-└─────────────────┘                            │   Manager       │
-        ▲                                      │    Task         │
-        │                                      │                 │
-        │              ┌──────────────────┐    │                 │
-        └──────────────│  API RESPONSE    │◀───│                 │
-                       │    CHANNEL       │    │                 │
-                       └──────────────────┘    └─────────────────┘
-                                                        │
-                                                        │
-                                                        ▼
-                                               ┌──────────────────┐
-                                               │  HCI Controller  │
-                                               │  (select! loop)  │
+```text
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────────┐
+│  API Functions  │    │  API REQUEST     │    │   API Request       │
+│                 │───▶│    CHANNEL       │───▶│   Processor Task    │
+│                 │    └──────────────────┘    │                     │
+└─────────────────┘                            └─────────────────────┘
+        ▲                                               │
+        │              ┌──────────────────┐             │
+        └──────────────│  API RESPONSE    │◀────────────┘
+                       │    CHANNEL       │
+                       └──────────────────┘
+                                                                       
+                       ┌──────────────────┐    ┌─────────────────────┐
+                       │   BondyBird      │    │   HCI Event         │
+                       │  Shared State    │◀───│   Processor Task    │
+                       │   (Mutex)        │    │                     │
+                       │                  │    └─────────────────────┘
+                       └──────────────────┘             ▲
+                                ▲                       │
+                                │                       │
+                                │              ┌──────────────────┐
+                                └──────────────│  HCI Controller  │
+                                               │   (Transport)    │
                                                └──────────────────┘
 ```
+
+## Benefits
+
+- **🔄 Parallel Processing**: HCI events and API requests are processed independently
+- **⏱️ Low Latency**: Events are processed immediately without blocking API operations  
+- **🧵 Thread Safety**: Shared state is properly synchronized with Embassy mutexes
+- **📈 Scalability**: Easy to add more processing tasks if needed
+- **🎯 Type Safety**: Strong typing prevents common errors at compile time
 
 ## Quickstart
 
 ```rust,no_run,ignore
-use bondybird::{bluetooth_manager_task, api};
-use bt_hci::transport::YourTransport;
+use bondybird::{hci_event_processor, api_request_processor, api};
+use bt_hci::controller::ExternalController;
 use embassy_executor::Spawner;
 
-// Spawn the Bluetooth manager task (only one task needed)
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // Create your transport and controller  
     let transport = YourTransport::new();
+    let controller = ExternalController::new(transport);
+    let controller_ref = Box::leak(Box::new(controller));
     
-    // Spawn the single Bluetooth manager task
-    spawner.spawn(bluetooth_manager_task(transport)).unwrap();
+    // Spawn both tasks for parallel processing
+    spawner.spawn(hci_event_processor(controller_ref)).unwrap();
+    spawner.spawn(api_request_processor(controller_ref)).unwrap();
     
-    // Use API functions in your application
+    // Use API functions from anywhere in your application
     let _ = api::start_discovery().await;
     let devices = api::get_devices().await.unwrap();
+    let _ = api::connect_device("AA:BB:CC:DD:EE:FF").await;
 }
 ```
 
-You can use the provided API functions in your application:
-- `api::start_discovery()` - Start device discovery
-- `api::get_devices()` - Get list of discovered devices
-- `api::connect_device(address)` - Connect to a device
-- `api::disconnect_device(address)` - Disconnect from a device
-- `api::get_state()` - Get current Bluetooth state
+## API Usage
+
+The API is designed to be simple and intuitive:
+
+```rust,no_run,ignore
+use bondybird::api;
+
+// Start device discovery
+api::start_discovery().await?;
+
+// Get discovered devices
+let devices = api::get_devices().await?;
+for device in devices {
+    println!("Found device: {:?}", device.addr.format_hex());
+}
+
+// Connect to a device
+api::connect_device("AA:BB:CC:DD:EE:FF").await?;
+
+// Check connection state
+let state = api::get_state().await?;
+println!("Bluetooth state: {:?}", state);
+
+// Disconnect
+api::disconnect_device("AA:BB:CC:DD:EE:FF").await?;
+```
 
 ## Integration with Applications
 
-BondyBird is designed to be easily integrated with applications. The API functions are simple and use static channels for communication with the Bluetooth manager task. This makes it easy to integrate with web servers, REST APIs, or any other application architecture.
+`BondyBird` is designed to be easily integrated with applications. The API functions are simple and use static channels for communication with the Bluetooth tasks. This makes it easy to integrate with web servers, REST APIs, or any other application architecture.
+
+### REST API Integration Example
 
 ```rust,no_run,ignore
 // In your application handler
-async fn discover_devices() -> Result<(), Box<dyn std::error::Error>> {
-    match bondybird::api::start_discovery().await {
-        Ok(()) => println!("Discovery started"),
-        Err(e) => println!("Error: {:?}", e),
-    }
-    Ok(())
+async fn discover_devices() -> Result<(), BluetoothError> {
+    bondybird::api::start_discovery().await
 }
 
-async fn list_devices() -> Result<(), Box<dyn std::error::Error>> {
-    match bondybird::api::get_devices().await {
-        Ok(devices) => {
-            for device in devices {
-                println!("Device: {:?}", device);
-            }
-        },
-        Err(e) => println!("Error: {:?}", e),
-    }
-    Ok(())
+async fn list_devices() -> Result<Vec<BluetoothDevice>, BluetoothError> {
+    bondybird::api::get_devices().await
+}
+
+async fn connect_to_device(address: &str) -> Result<(), BluetoothError> {
+    bondybird::api::connect_device(address).await
 }
 ```
 
-## Example: Complete Flow
+## Example: Complete Bluetooth Flow
 
 ```rust,no_run,ignore
-// 1. Start discovery
-let _ = bondybird::api::start_discovery().await;
+use bondybird::api;
+use embassy_time::{Duration, Timer};
 
-// 2. Wait for discovery to find devices
-embassy_time::Timer::after(embassy_time::Duration::from_secs(5)).await;
+async fn bluetooth_example() -> Result<(), BluetoothError> {
+    // 1. Start discovery
+    api::start_discovery().await?;
 
-// 3. Get discovered devices
-let devices = bondybird::api::get_devices().await.unwrap();
+    // 2. Wait for discovery to find devices  
+    Timer::after(Duration::from_secs(5)).await;
 
-// 4. Connect to the first device
-if let Some(device) = devices.first() {
-    let addr_str = format_address(device.addr);
-    let _ = bondybird::api::connect_device(addr_str.into()).await;
+    // 3. Get discovered devices
+    let devices = api::get_devices().await?;
+    println!("Found {} devices", devices.len());
+
+    // 4. Connect to the first device if available
+    if let Some(device) = devices.first() {
+        let addr_str = device.addr.format_hex();
+        api::connect_device(&addr_str).await?;
+        println!("Connected to device: {}", addr_str);
+    }
+
+    // 5. Check Bluetooth state
+    let state = api::get_state().await?;
+    println!("Bluetooth state: {:?}", state);
+
+    Ok(())
 }
-
-// 5. Check Bluetooth state
-let state = bondybird::api::get_state().await.unwrap();
 ```
 
 ## Features
 
-- **no_std Compatible**: Designed for embedded systems with minimal resources
-- **Async-first Design**: Built on Embassy executor for efficient resource usage
-- **Single-task Architecture**: Simplifies memory usage and coordination
-- **Static Channels**: Efficient communication with zero heap allocations
-- **Direct HCI Integration**: Uses bt-hci for standardized controller communication
+- 🚀 **Parallel Processing**: Separate tasks for HCI events and API requests prevent blocking
+- 🔒 **Thread-Safe**: Embassy mutex-based shared state management ensures data consistency  
+- ⚡ **Low Latency**: Immediate HCI event processing without blocking API operations
+- 📦 **`no_std` Compatible**: Designed for embedded systems with minimal resources
+- 🛡️ **Type Safe**: Strong typing with newtype wrappers prevents common errors
+- 🔄 **Async-first Design**: Built on Embassy crates for efficient resource usage
+- 📡 **Static Channels**: Efficient communication with zero heap allocations
+- 🔧 **Direct HCI Integration**: Uses bt-hci for standardized controller communication
+
+## Supported Bluetooth Operations
+
+- ✅ Device Discovery (Inquiry)
+- ✅ Device Connection/Disconnection  
+- ✅ RSSI Information
+- ✅ Device Class parsing
+- ✅ Remote Name Resolution
+- ✅ Connection State Management
 
 ## License
 
