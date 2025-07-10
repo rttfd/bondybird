@@ -122,6 +122,24 @@ pub async fn get_local_info() -> Result<LocalDeviceInfo, BluetoothError> {
     }
 }
 
+/// Get the list of paired/connected Bluetooth devices.
+///
+/// # Errors
+///
+/// Returns an error if communication fails or the response is unexpected.
+pub async fn get_paired_devices()
+-> Result<Vec<BluetoothDevice, MAX_DISCOVERED_DEVICES>, BluetoothError> {
+    REQUEST_CHANNEL
+        .sender()
+        .send(Request::GetPairedDevices)
+        .await;
+    match RESPONSE_CHANNEL.receiver().receive().await {
+        Response::PairedDevices(devices) => Ok(devices),
+        Response::Error(e) => Err(e),
+        _ => Err(BluetoothError::HciError),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +180,7 @@ mod tests {
             Request::Disconnect(heapless::String::try_from("12:34:56:78:9A:BC").unwrap()),
             Request::GetState,
             Request::GetLocalInfo,
+            Request::GetPairedDevices,
         ];
 
         // Just ensure they can be created and cloned
@@ -176,11 +195,15 @@ mod tests {
         let mut devices = heapless::Vec::new();
         devices.push(test_device).unwrap();
 
+        let mut paired_devices = heapless::Vec::new();
+        paired_devices.push(test_device).unwrap();
+
         // Test that all Response variants can be created
         let responses = [
             Response::DiscoverComplete,
             Response::DiscoveryStopped,
             Response::Devices(devices),
+            Response::PairedDevices(paired_devices),
             Response::PairComplete,
             Response::DisconnectComplete,
             Response::State(BluetoothState::PoweredOn),
@@ -304,5 +327,34 @@ mod tests {
 
         let result: Result<heapless::String<64>, _> = heapless::String::try_from(too_long_str);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_paired_devices_api() {
+        // Test that the get_paired_devices function can be called
+        // This is a compilation test since we don't have a real runtime here
+
+        // Verify that the Request enum includes GetPairedDevices
+        let request = Request::GetPairedDevices;
+        match request {
+            Request::GetPairedDevices => {
+                // Expected variant exists
+            }
+            _ => panic!("GetPairedDevices variant should exist"),
+        }
+
+        // Verify that Response enum includes PairedDevices
+        let test_device = create_test_device();
+        let mut paired_devices = heapless::Vec::new();
+        paired_devices.push(test_device).unwrap();
+
+        let response = Response::PairedDevices(paired_devices);
+        match response {
+            Response::PairedDevices(devices) => {
+                assert_eq!(devices.len(), 1);
+                assert_eq!(devices[0].addr.format_hex(), "12:34:56:78:9A:BC");
+            }
+            _ => panic!("PairedDevices variant should exist"),
+        }
     }
 }

@@ -172,6 +172,22 @@ impl BluetoothHost {
             },
             Request::GetState => Response::State(self.state),
             Request::GetLocalInfo => Response::LocalInfo(self.local_info),
+            Request::GetPairedDevices => {
+                // Get devices that have active connections (paired/connected devices)
+                let mut paired_devices: Vec<BluetoothDevice, { constants::MAX_CHANNELS }> =
+                    Vec::new();
+
+                for (addr, _handle) in &self.connections {
+                    if let Some(device) = self.devices.get(addr) {
+                        if paired_devices.push(*device).is_err() {
+                            // If we can't add more devices, break (shouldn't happen with proper constants)
+                            break;
+                        }
+                    }
+                }
+
+                Response::PairedDevices(paired_devices)
+            }
         }
     }
 

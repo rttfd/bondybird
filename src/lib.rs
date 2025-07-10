@@ -492,6 +492,8 @@ pub enum Request {
     GetState,
     /// Get local Bluetooth information
     GetLocalInfo,
+    /// Get list of paired/connected devices
+    GetPairedDevices,
 }
 
 /// API responses sent back from the Bluetooth processing tasks
@@ -505,6 +507,8 @@ pub enum Response {
     DiscoveryStopped,
     /// List of discovered devices
     Devices(Vec<BluetoothDevice, MAX_CHANNELS>),
+    /// List of paired/connected devices
+    PairedDevices(Vec<BluetoothDevice, MAX_CHANNELS>),
     /// Pairing completed successfully
     PairComplete,
     /// Disconnection completed
