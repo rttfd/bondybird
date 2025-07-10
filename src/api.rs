@@ -140,6 +140,59 @@ pub async fn get_paired_devices()
     }
 }
 
+/// Get the name of a specific Bluetooth device by address.
+///
+/// This function performs a Remote Name Request to retrieve the human-readable name
+/// of a Bluetooth device. The device must be discoverable and within range.
+///
+/// # Arguments
+///
+/// * `address` - The Bluetooth device address as a string (e.g., "12:34:56:78:9A:BC")
+///
+/// # Returns
+///
+/// * `Ok((address, name))` - The device address and name (32-byte array, null-terminated)
+/// * `Err(BluetoothError)` - If the request fails or the device is not found
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The address format is invalid
+/// - The device is not reachable
+/// - The Remote Name Request times out
+/// - The response is unexpected
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use bondybird::api::get_device_name;
+/// use heapless::String;
+///
+/// # async fn example() -> Result<(), bondybird::BluetoothError> {
+/// let address: String<64> = String::try_from("12:34:56:78:9A:BC").unwrap();
+/// let (addr, name) = get_device_name(address).await?;
+///
+/// // Convert name bytes to string (find null terminator)
+/// let name_len = name.iter().position(|&b| b == 0).unwrap_or(32);
+/// let name_str = core::str::from_utf8(&name[..name_len]).unwrap_or("Invalid UTF-8");
+/// println!("Device {} is named: {}", addr.as_str(), name_str);
+/// # Ok(())
+/// # }
+/// ```
+pub async fn get_device_name(
+    address: String<64>,
+) -> Result<(String<64>, [u8; 32]), BluetoothError> {
+    REQUEST_CHANNEL
+        .sender()
+        .send(Request::GetDeviceName(address))
+        .await;
+    match RESPONSE_CHANNEL.receiver().receive().await {
+        Response::DeviceName(addr, name) => Ok((addr, name)),
+        Response::Error(e) => Err(e),
+        _ => Err(BluetoothError::HciError),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +234,7 @@ mod tests {
             Request::GetState,
             Request::GetLocalInfo,
             Request::GetPairedDevices,
+            Request::GetDeviceName(heapless::String::try_from("12:34:56:78:9A:BC").unwrap()),
         ];
 
         // Just ensure they can be created and cloned
@@ -198,6 +252,11 @@ mod tests {
         let mut paired_devices = heapless::Vec::new();
         paired_devices.push(test_device).unwrap();
 
+        let test_name = [
+            b'T', b'e', b's', b't', b' ', b'D', b'e', b'v', b'i', b'c', b'e', 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
         // Test that all Response variants can be created
         let responses = [
             Response::DiscoverComplete,
@@ -208,12 +267,80 @@ mod tests {
             Response::DisconnectComplete,
             Response::State(BluetoothState::PoweredOn),
             Response::LocalInfo(create_test_local_info()),
+            Response::DeviceName(
+                heapless::String::try_from("12:34:56:78:9A:BC").unwrap(),
+                test_name,
+            ),
             Response::Error(BluetoothError::DeviceNotFound),
         ];
 
         // Just ensure they can be created and cloned
         for response in responses {
             let _cloned = response.clone();
+        }
+    }
+
+    #[test]
+    fn test_get_device_name_api() {
+        // Test that the get_device_name function signature is correct
+        // This is a compilation test since we don't have a real runtime here
+
+        // Verify that the Request enum includes GetDeviceName
+        let address = heapless::String::try_from("12:34:56:78:9A:BC").unwrap();
+        let request = Request::GetDeviceName(address.clone());
+        match request {
+            Request::GetDeviceName(addr) => {
+                assert_eq!(addr.as_str(), "12:34:56:78:9A:BC");
+            }
+            _ => panic!("GetDeviceName variant should exist"),
+        }
+
+        // Verify that Response enum includes DeviceName
+        let test_name = [
+            b'T', b'e', b's', b't', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let response = Response::DeviceName(address, test_name);
+        match response {
+            Response::DeviceName(addr, name) => {
+                assert_eq!(addr.as_str(), "12:34:56:78:9A:BC");
+                assert_eq!(&name[0..4], b"Test");
+                assert_eq!(name[4], 0); // Null terminator
+            }
+            _ => panic!("DeviceName variant should exist"),
+        }
+    }
+
+    #[test]
+    fn test_device_name_encoding() {
+        // Test that device names are properly handled as byte arrays
+        let test_names = [
+            // ASCII name
+            [
+                b'M', b'y', b' ', b'H', b'e', b'a', b'd', b's', b'e', b't', 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ],
+            // Empty name (all zeros)
+            [0u8; 32],
+            // Name with international characters (UTF-8 encoded)
+            [
+                0xC3, 0xA4, 0xC3, 0xB6, 0xC3, 0xBC, b'_', b'd', b'e', b'v', b'i', b'c', b'e', 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ],
+        ];
+
+        for name in test_names {
+            let addr_str = heapless::String::try_from("AA:BB:CC:DD:EE:FF").unwrap();
+            let response = Response::DeviceName(addr_str.clone(), name);
+
+            match response {
+                Response::DeviceName(addr, received_name) => {
+                    assert_eq!(addr.as_str(), "AA:BB:CC:DD:EE:FF");
+                    assert_eq!(received_name, name);
+                }
+                _ => panic!("Should be DeviceName response"),
+            }
         }
     }
 
@@ -327,34 +454,5 @@ mod tests {
 
         let result: Result<heapless::String<64>, _> = heapless::String::try_from(too_long_str);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_get_paired_devices_api() {
-        // Test that the get_paired_devices function can be called
-        // This is a compilation test since we don't have a real runtime here
-
-        // Verify that the Request enum includes GetPairedDevices
-        let request = Request::GetPairedDevices;
-        match request {
-            Request::GetPairedDevices => {
-                // Expected variant exists
-            }
-            _ => panic!("GetPairedDevices variant should exist"),
-        }
-
-        // Verify that Response enum includes PairedDevices
-        let test_device = create_test_device();
-        let mut paired_devices = heapless::Vec::new();
-        paired_devices.push(test_device).unwrap();
-
-        let response = Response::PairedDevices(paired_devices);
-        match response {
-            Response::PairedDevices(devices) => {
-                assert_eq!(devices.len(), 1);
-                assert_eq!(devices[0].addr.format_hex(), "12:34:56:78:9A:BC");
-            }
-            _ => panic!("PairedDevices variant should exist"),
-        }
     }
 }
