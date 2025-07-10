@@ -132,7 +132,7 @@ impl BluetoothHost {
                     Ok(()) => {
                         self.discovering = true;
                         self.state = BluetoothState::Discovering;
-                        Response::DiscoverComplete
+                        Response::DiscoverStarted
                     }
                     Err(e) => Response::Error(e),
                 }
@@ -179,10 +179,11 @@ impl BluetoothHost {
         &mut self,
         controller: &ExternalController<T, SLOTS>,
     ) -> Result<(), BluetoothError> {
+        let options = self.options();
         let inquiry_cmd = bt_hci::cmd::link_control::Inquiry::new(
-            constants::GIAC,
-            constants::DEFAULT_INQUIRY_DURATION,
-            constants::UNLIMITED_RESPONSES,
+            options.lap,
+            options.inquiry_length,
+            options.num_responses,
         );
 
         controller
@@ -329,11 +330,14 @@ impl BluetoothHost {
             .exec(&reset_cmd)
             .await
             .map_err(|_| BluetoothError::HciError)?;
+        defmt::debug!("Controller reset complete");
 
         // Step 2: Set event mask to enable the events we're interested in
         let event_mask = EventMask::new()
             .enable_inquiry_complete(true)
             .enable_inquiry_result(true)
+            .enable_inquiry_result_with_rssi(true)
+            .enable_ext_inquiry_result(true)
             .enable_conn_complete(true)
             .enable_conn_request(true)
             .enable_disconnection_complete(true)
@@ -360,6 +364,7 @@ impl BluetoothHost {
             .exec(&set_event_mask)
             .await
             .map_err(|_| BluetoothError::HciError)?;
+        defmt::debug!("Event mask set successfully");
 
         // Step 3: Get local version information
         let read_local_version = cmd::info::ReadLocalVersionInformation::new();
@@ -367,6 +372,10 @@ impl BluetoothHost {
             .exec(&read_local_version)
             .await
             .map_err(|_| BluetoothError::HciError)?;
+        defmt::debug!(
+            "Local version info: {:?}",
+            defmt::Debug2Format(&version_info)
+        );
 
         // Extract and store the version information using our helper method
         let hci_version = Self::core_spec_version_to_u8(version_info.hci_version);
@@ -384,11 +393,14 @@ impl BluetoothHost {
             .exec(&read_bd_addr)
             .await
             .map_err(|_| BluetoothError::HciError)?;
+        defmt::debug!("Local BD_ADDR: {:?}", defmt::Debug2Format(&bd_addr));
 
         self.local_info.bd_addr = bd_addr.try_into().ok();
 
         // Mark controller as ready
         self.state = BluetoothState::PoweredOn;
+
+        defmt::debug!("Bluetooth controller initialized successfully");
         Ok(())
     }
 
@@ -517,7 +529,9 @@ impl BluetoothHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BluetoothAddress, BluetoothDevice, BluetoothError, BluetoothState, constants};
+    use crate::{
+        BluetoothAddress, BluetoothDevice, BluetoothError, BluetoothState, ClassOfDevice, constants,
+    };
 
     // Helper function to create a test BluetoothHost
     fn create_test_host() -> BluetoothHost {
@@ -550,12 +564,12 @@ mod tests {
         // Valid 3-byte class of device
         let bytes = [0x12, 0x34, 0x56];
         let result = BluetoothDevice::parse_class_of_device(&bytes);
-        assert_eq!(result, Some(0x123456)); // Big-endian format
+        assert_eq!(result, Some(ClassOfDevice::from_raw(0x563412))); // Little-endian format
 
         // Valid 4+ byte array (should only use first 3)
         let bytes = [0x12, 0x34, 0x56, 0x78, 0x9A];
         let result = BluetoothDevice::parse_class_of_device(&[bytes[0], bytes[1], bytes[2]]);
-        assert_eq!(result, Some(0x123456));
+        assert_eq!(result, Some(ClassOfDevice::from_raw(0x563412)));
 
         // Zero class of device
         let bytes = [0x00, 0x00, 0x00];
@@ -687,7 +701,7 @@ mod tests {
             addr,
             rssi: Some(-50),
             name: Some(name),
-            class_of_device: Some(0x123456),
+            class_of_device: Some(ClassOfDevice::from_raw(0x123456)),
         };
         host.upsert_device(device);
         assert_eq!(host.devices.len(), 1);
@@ -695,7 +709,10 @@ mod tests {
         assert_eq!(device.addr, addr);
         assert_eq!(device.rssi, Some(-50));
         assert_eq!(device.name, Some(name));
-        assert_eq!(device.class_of_device, Some(0x123456));
+        assert_eq!(
+            device.class_of_device,
+            Some(ClassOfDevice::from_raw(0x123456))
+        );
     }
 
     #[test]
@@ -715,7 +732,7 @@ mod tests {
             addr,
             rssi: Some(-60),
             name: Some(original_name),
-            class_of_device: Some(0x111111),
+            class_of_device: Some(ClassOfDevice::from_raw(0x111111)),
         };
         host.upsert_device(device);
         assert_eq!(host.devices.len(), 1);
@@ -724,7 +741,7 @@ mod tests {
             addr,
             rssi: Some(-40),
             name: Some(new_name),
-            class_of_device: Some(0x111111),
+            class_of_device: Some(ClassOfDevice::from_raw(0x111111)),
         };
         host.upsert_device(device);
         assert_eq!(host.devices.len(), 1); // Should still be only one device
@@ -732,7 +749,10 @@ mod tests {
         assert_eq!(device.addr, addr);
         assert_eq!(device.rssi, Some(-40)); // Updated
         assert_eq!(device.name, Some(new_name)); // Updated
-        assert_eq!(device.class_of_device, Some(0x111111)); // Unchanged
+        assert_eq!(
+            device.class_of_device,
+            Some(ClassOfDevice::from_raw(0x111111))
+        ); // Unchanged
     }
 
     #[test]
@@ -749,7 +769,7 @@ mod tests {
             addr,
             rssi: Some(-60),
             name: Some(name),
-            class_of_device: Some(0x111111),
+            class_of_device: Some(ClassOfDevice::from_raw(0x111111)),
         };
         host.upsert_device(device);
         // Update only RSSI
@@ -757,13 +777,16 @@ mod tests {
             addr,
             rssi: Some(-30),
             name: Some(name),
-            class_of_device: Some(0x111111),
+            class_of_device: Some(ClassOfDevice::from_raw(0x111111)),
         };
         host.upsert_device(device);
         let device = host.devices.get(&addr).unwrap();
         assert_eq!(device.rssi, Some(-30)); // Updated
         assert_eq!(device.name, Some(name)); // Unchanged
-        assert_eq!(device.class_of_device, Some(0x111111)); // Unchanged
+        assert_eq!(
+            device.class_of_device,
+            Some(ClassOfDevice::from_raw(0x111111))
+        ); // Unchanged
     }
 
     #[test]
@@ -886,13 +909,13 @@ mod tests {
             addr: addr1,
             rssi: Some(-45),
             name: None,
-            class_of_device: Some(0x240404),
+            class_of_device: Some(ClassOfDevice::from_raw(0x240404)),
         };
         let device2 = BluetoothDevice {
             addr: addr2,
             rssi: Some(-55),
             name: None,
-            class_of_device: Some(0x1F00),
+            class_of_device: Some(ClassOfDevice::from_raw(0x1F00)),
         };
         host.upsert_device(device1);
         host.upsert_device(device2);
@@ -968,7 +991,7 @@ mod tests {
         assert_eq!(BluetoothDevice::parse_class_of_device(&[0, 0, 0]), None);
         assert_eq!(
             BluetoothDevice::parse_class_of_device(&[0x12, 0x34, 0x56]),
-            Some(0x123456)
+            Some(ClassOfDevice::from_raw(0x563412))
         );
     }
 
@@ -986,7 +1009,7 @@ mod tests {
             addr,
             rssi: Some(-70),
             name: None,
-            class_of_device: Some(0x123456),
+            class_of_device: Some(ClassOfDevice::from_raw(0x123456)),
         };
         host.upsert_device(device);
         assert!(host.devices.contains_key(&addr));
@@ -996,14 +1019,14 @@ mod tests {
             addr,
             rssi: Some(-60),
             name: None,
-            class_of_device: Some(0x123456),
+            class_of_device: Some(ClassOfDevice::from_raw(0x123456)),
         };
         host.upsert_device(device);
         let device = BluetoothDevice {
             addr,
             rssi: Some(-55),
             name: None,
-            class_of_device: Some(0x123456),
+            class_of_device: Some(ClassOfDevice::from_raw(0x123456)),
         };
         host.upsert_device(device);
         let mut name = [0u8; constants::MAX_DEVICE_NAME_LENGTH];
@@ -1016,6 +1039,9 @@ mod tests {
         let device = host.devices.get(&addr).unwrap();
         assert_eq!(device.rssi, Some(-55)); // Last RSSI update
         assert_eq!(device.name, Some(name)); // Name from last update
-        assert_eq!(device.class_of_device, Some(0x123456)); // CoD from middle update
+        assert_eq!(
+            device.class_of_device,
+            Some(ClassOfDevice::from_raw(0x123456))
+        ); // CoD from middle update
     }
 }

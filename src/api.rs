@@ -43,7 +43,7 @@ use heapless::{String, Vec};
 pub async fn start_discovery() -> Result<(), BluetoothError> {
     REQUEST_CHANNEL.sender().send(Request::Discover).await;
     match RESPONSE_CHANNEL.receiver().receive().await {
-        Response::DiscoverComplete => Ok(()),
+        Response::DiscoverStarted => Ok(()),
         Response::Error(e) => Err(e),
         _ => Err(BluetoothError::HciError),
     }
@@ -125,13 +125,13 @@ pub async fn get_local_info() -> Result<LocalDeviceInfo, BluetoothError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BluetoothAddress, BluetoothState, LocalDeviceInfo};
+    use crate::{BluetoothAddress, BluetoothState, ClassOfDevice, LocalDeviceInfo};
 
     /// Helper function to create a test device
     fn create_test_device() -> BluetoothDevice {
         BluetoothDevice::new(BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]))
             .with_rssi(-45)
-            .with_class_of_device(0x240404) // Audio device
+            .with_class_of_device(ClassOfDevice::from_raw(0x240404)) // Audio device
     }
 
     /// Helper function to create test local info
@@ -212,6 +212,7 @@ mod tests {
                 BluetoothState::Discovering => {}
                 BluetoothState::Connecting => {}
                 BluetoothState::Connected => {}
+                BluetoothState::Idle => {}
             }
         }
     }

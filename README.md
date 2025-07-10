@@ -63,12 +63,16 @@
 ## Quickstart
 
 ```rust,no_run,ignore
-use bondybird::{hci_event_processor, api_request_processor, api};
+use bondybird::{hci_event_processor, api_request_processor, api, init_bluetooth_host, BluetoothHostOptions};
 use bt_hci::controller::ExternalController;
 use embassy_executor::Spawner;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // Initialize BluetoothHost with custom options (or use default)
+    let options = BluetoothHostOptions::default(); // Uses GIAC, default inquiry duration
+    init_bluetooth_host(options).await.expect("Failed to initialize BluetoothHost");
+    
     // Create your transport and controller  
     let transport = YourTransport::new();
     let controller = ExternalController::new(transport);
@@ -87,10 +91,21 @@ async fn main(spawner: Spawner) {
 
 ## API Usage
 
-The API is designed to be simple and intuitive:
+The API is designed to be simple and intuitive. Before using any API functions, you must initialize the BluetoothHost with your desired configuration:
 
 ```rust,no_run,ignore
-use bondybird::api;
+use bondybird::{api, init_bluetooth_host, BluetoothHostOptions, constants};
+
+// Initialize with default options
+init_bluetooth_host(BluetoothHostOptions::default()).await?;
+
+// Or initialize with custom options
+let options = BluetoothHostOptions {
+    lap: constants::GIAC,           // General Inquiry Access Code
+    inquiry_length: 10,             // 10 * 1.28s = 12.8 seconds
+    num_responses: 20,              // Maximum 20 responses
+};
+init_bluetooth_host(options).await?;
 
 // Start device discovery
 api::start_discovery().await?;
@@ -111,6 +126,39 @@ println!("Bluetooth state: {:?}", state);
 // Disconnect
 api::disconnect_device("AA:BB:CC:DD:EE:FF").await?;
 ```
+
+## Configuration
+
+`BondyBird` supports runtime configuration of Bluetooth inquiry parameters through `BluetoothHostOptions`:
+
+```rust,no_run,ignore
+use bondybird::{BluetoothHostOptions, constants};
+
+// Default configuration
+let default_options = BluetoothHostOptions::default();
+
+// Custom configuration
+let custom_options = BluetoothHostOptions {
+    lap: constants::GIAC,           // Local Area Protocol - use GIAC for general inquiry
+    inquiry_length: 5,              // Inquiry duration: 5 * 1.28s = 6.4 seconds
+    num_responses: 15,              // Maximum number of device responses
+};
+
+// Alternative LAP codes (if needed)
+let limited_inquiry = BluetoothHostOptions {
+    lap: [0x00, 0x8B, 0x9E],       // LIAC - Limited Inquiry Access Code
+    inquiry_length: 8,
+    num_responses: 10,
+};
+```
+
+### Configuration Parameters
+
+- **`lap`**: Local Area Protocol (3 bytes) - determines which devices respond to inquiry
+  - `GIAC` ([0x33, 0x8B, 0x9E]): General Inquiry - discovers all discoverable devices
+  - `LIAC` ([0x00, 0x8B, 0x9E]): Limited Inquiry - discovers devices in limited discoverable mode
+- **`inquiry_length`**: Duration of device discovery in units of 1.28 seconds (1-48)
+- **`num_responses`**: Maximum number of device responses to collect (0-255, 0 = unlimited)
 
 ## Integration with Applications
 
@@ -136,10 +184,18 @@ async fn connect_to_device(address: &str) -> Result<(), BluetoothError> {
 ## Example: Complete Bluetooth Flow
 
 ```rust,no_run,ignore
-use bondybird::api;
+use bondybird::{api, init_bluetooth_host, BluetoothHostOptions};
 use embassy_time::{Duration, Timer};
 
 async fn bluetooth_example() -> Result<(), BluetoothError> {
+    // 0. Initialize BluetoothHost first
+    let options = BluetoothHostOptions {
+        lap: [0x33, 0x8B, 0x9E],       // GIAC - General Inquiry Access Code
+        inquiry_length: 8,              // 8 * 1.28s = ~10 seconds
+        num_responses: 10,              // Maximum 10 device responses
+    };
+    init_bluetooth_host(options).await?;
+
     // 1. Start discovery
     api::start_discovery().await?;
 
@@ -175,6 +231,8 @@ async fn bluetooth_example() -> Result<(), BluetoothError> {
 - 🔄 **Async-first Design**: Built on Embassy crates for efficient resource usage
 - 📡 **Static Channels**: Efficient communication with zero heap allocations
 - 🔧 **Direct HCI Integration**: Uses bt-hci for standardized controller communication
+- ⚙️ **Runtime Configuration**: Configure inquiry parameters (GIAC, duration) at startup
+- 🎯 **Client-Controlled Initialization**: Initialize BluetoothHost when your application is ready
 
 ## Supported Bluetooth Operations
 

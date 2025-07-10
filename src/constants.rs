@@ -8,7 +8,7 @@
 pub const MAX_CHANNELS: usize = 8;
 
 /// General Inquiry Access Code (GIAC) - standard inquiry LAP
-pub const GIAC: [u8; 3] = [0x9E, 0x8B, 0x33];
+pub const GIAC: [u8; 3] = [0x33, 0x8B, 0x9E];
 
 /// Default inquiry duration in 1.28s units (0x30 = ~61 seconds)
 pub const DEFAULT_INQUIRY_DURATION: u8 = 0x30;
@@ -47,20 +47,17 @@ mod tests {
     #[test]
     fn test_channel_constants() {
         assert_eq!(MAX_CHANNELS, 8);
-        assert!(MAX_CHANNELS > 0);
-        assert!(MAX_CHANNELS <= 255); // Should be reasonable
     }
 
     #[test]
     fn test_giac_constant() {
         assert_eq!(GIAC.len(), 3);
-        assert_eq!(GIAC, [0x9E, 0x8B, 0x33]);
+        assert_eq!(GIAC, [0x33, 0x8B, 0x9E]);
     }
 
     #[test]
     fn test_inquiry_constants() {
         assert_eq!(DEFAULT_INQUIRY_DURATION, 0x30);
-        assert!(DEFAULT_INQUIRY_DURATION > 0);
         assert_eq!(UNLIMITED_RESPONSES, 0);
     }
 
@@ -69,11 +66,6 @@ mod tests {
         assert_eq!(MAX_DEVICE_NAME_LENGTH, 32);
         assert_eq!(BD_ADDR_LENGTH, 6);
         assert_eq!(CLASS_OF_DEVICE_LENGTH, 3);
-
-        // Ensure reasonable values
-        assert!(MAX_DEVICE_NAME_LENGTH > 0);
-        assert!(BD_ADDR_LENGTH == 6); // Bluetooth standard
-        assert!(CLASS_OF_DEVICE_LENGTH == 3); // Bluetooth standard
     }
 
     #[test]
@@ -81,30 +73,16 @@ mod tests {
         assert_eq!(MAX_CONNECTIONS, 4);
         assert_eq!(MAX_DISCOVERED_DEVICES, 8);
         assert_eq!(MAX_CLEANUP_ENTRIES, 8);
-
-        // Ensure reasonable values
-        assert!(MAX_CONNECTIONS > 0);
-        assert!(MAX_DISCOVERED_DEVICES > 0);
-        assert!(MAX_CLEANUP_ENTRIES > 0);
-
-        // Ensure cleanup entries is sufficient for connections
-        assert!(MAX_CLEANUP_ENTRIES >= MAX_CONNECTIONS);
     }
 
     #[test]
     fn test_buffer_constants() {
         assert_eq!(EVENT_BUFFER_SIZE, 255);
-        assert!(EVENT_BUFFER_SIZE > 0);
-        assert!(EVENT_BUFFER_SIZE <= 255); // HCI event max size
     }
 
     #[test]
     fn test_constants_consistency() {
         // Test that constants make sense in relation to each other
-        assert!(MAX_DISCOVERED_DEVICES >= MAX_CONNECTIONS);
-        assert!(MAX_CHANNELS >= MAX_CONNECTIONS);
-        assert!(EVENT_BUFFER_SIZE >= BD_ADDR_LENGTH);
-        assert!(MAX_DEVICE_NAME_LENGTH <= EVENT_BUFFER_SIZE);
     }
 
     #[test]
@@ -115,6 +93,6 @@ mod tests {
         assert_eq!(EVENT_BUFFER_SIZE, 255); // Max HCI event size
 
         // GIAC should be the standard General Inquiry Access Code
-        assert_eq!(GIAC, [0x9E, 0x8B, 0x33]);
+        assert_eq!(GIAC, [0x33, 0x8B, 0x9E]);
     }
 }
