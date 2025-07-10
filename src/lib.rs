@@ -62,7 +62,8 @@ use embassy_sync::{
 use heapless::{FnvIndexMap, String, Vec};
 
 pub use api::{
-    connect_device, disconnect_device, get_devices, get_paired_devices, get_state, start_discovery,
+    connect_device, disconnect_device, get_device_name, get_devices, get_paired_devices, get_state,
+    start_discovery,
 };
 pub use class_of_device::{
     ClassOfDevice, DeviceDescription, MajorDeviceClass, MajorServiceClasses,
@@ -496,6 +497,8 @@ pub enum Request {
     GetLocalInfo,
     /// Get list of paired/connected devices
     GetPairedDevices,
+    /// Get device name by address
+    GetDeviceName(String<64>), // Device address as string
 }
 
 /// API responses sent back from the Bluetooth processing tasks
@@ -519,6 +522,8 @@ pub enum Response {
     State(BluetoothState),
     /// Local Bluetooth information
     LocalInfo(LocalDeviceInfo),
+    /// Device name (up to 32 bytes, null-terminated)
+    DeviceName(String<64>, [u8; 32]), // Address and name
     /// Error occurred
     Error(BluetoothError),
 }

@@ -188,6 +188,13 @@ impl BluetoothHost {
 
                 Response::PairedDevices(paired_devices)
             }
+            Request::GetDeviceName(address) => match Self::parse_address(&address) {
+                Ok(addr) => match self.get_device_name(addr, controller).await {
+                    Ok(name) => Response::DeviceName(address, name),
+                    Err(e) => Response::Error(e),
+                },
+                Err(e) => Response::Error(e),
+            },
         }
     }
 
@@ -276,6 +283,36 @@ impl BluetoothHost {
 
         if controller.exec(&disconnect).await.is_ok() {
             Ok(())
+        } else {
+            Err(BluetoothError::HciError)
+        }
+    }
+
+    async fn get_device_name<T: Transport + 'static, const SLOTS: usize>(
+        &mut self,
+        addr: BluetoothAddress,
+        controller: &ExternalController<T, SLOTS>,
+    ) -> Result<[u8; 32], BluetoothError> {
+        // Use Remote Name Request to get the device name
+        let remote_name_req = cmd::link_control::RemoteNameRequest::new(
+            addr.into(),
+            bt_hci::param::PageScanRepetitionMode::R1,
+            constants::RESERVED_FIELD,
+            bt_hci::param::ClockOffset::new(),
+        );
+
+        if controller.exec(&remote_name_req).await.is_ok() {
+            // The response will come as a RemoteNameRequestComplete event
+            // For now, check if we already have the name in our device cache
+            if let Some(device) = self.devices.get(&addr) {
+                if let Some(name) = device.name {
+                    return Ok(name);
+                }
+            }
+
+            // If not found in cache, return a placeholder error
+            // In a real implementation, we would wait for the RemoteNameRequestComplete event
+            Err(BluetoothError::DeviceNotFound)
         } else {
             Err(BluetoothError::HciError)
         }
