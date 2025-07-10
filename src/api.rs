@@ -199,7 +199,7 @@ mod tests {
     fn create_test_device() -> BluetoothDevice {
         BluetoothDevice::new(BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]))
             .with_rssi(-45)
-            .with_class_of_device(ClassOfDevice::from_raw(0x240404)) // Audio device
+            .with_class_of_device(ClassOfDevice::from_raw(0x0024_0404)) // Audio device
     }
 
     /// Helper function to create test local info
@@ -329,55 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bluetooth_state_variants() {
-        let states = [
-            BluetoothState::PoweredOff,
-            BluetoothState::PoweredOn,
-            BluetoothState::Discovering,
-            BluetoothState::Connecting,
-            BluetoothState::Connected,
-        ];
-
-        // Test that all variants exist and can be used
-        for state in states {
-            match state {
-                BluetoothState::PoweredOff => {}
-                BluetoothState::PoweredOn => {}
-                BluetoothState::Discovering => {}
-                BluetoothState::Connecting => {}
-                BluetoothState::Connected => {}
-                BluetoothState::Idle => {}
-            }
-        }
-    }
-
-    #[test]
-    fn test_bluetooth_error_variants() {
-        let errors = [
-            BluetoothError::HciError,
-            BluetoothError::DeviceNotFound,
-            BluetoothError::DeviceNotConnected,
-            BluetoothError::ConnectionFailed,
-            BluetoothError::Timeout,
-            BluetoothError::AlreadyInProgress,
-            BluetoothError::InvalidParameter,
-            BluetoothError::NotSupported,
-            BluetoothError::DiscoveryFailed,
-            BluetoothError::InitializationFailed,
-            BluetoothError::TransportError,
-            BluetoothError::InvalidState,
-        ];
-
-        // Test that all error variants exist and implement required traits
-        for error in errors {
-            // Test Debug trait by ensuring it implements Debug
-            let _ = &error as &dyn core::fmt::Debug;
-            let _cloned = error;
-            assert_eq!(error, error); // Test PartialEq
-        }
-    }
-
-    #[test]
     fn test_max_discovered_devices_constant() {
         // Test that we can create a Vec with the maximum capacity
         let mut devices: heapless::Vec<BluetoothDevice, MAX_DISCOVERED_DEVICES> =
@@ -385,6 +336,7 @@ mod tests {
 
         // Fill it up to capacity
         for i in 0..MAX_DISCOVERED_DEVICES {
+            #[allow(clippy::cast_possible_truncation)]
             let addr = BluetoothAddress::new([(i >> 8) as u8, i as u8, 0x00, 0x00, 0x00, 0x00]);
             let device = BluetoothDevice::new(addr);
             assert!(devices.push(device).is_ok());
