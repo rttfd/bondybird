@@ -214,14 +214,14 @@ impl TryFrom<bt_hci::param::BdAddr> for BluetoothAddress {
 }
 
 /// Represents a discovered Bluetooth device with its properties
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct BluetoothDevice {
     /// Bluetooth device address (`BD_ADDR`)
     pub addr: BluetoothAddress,
     /// Received Signal Strength Indicator (RSSI) in dBm, if available
     pub rssi: Option<i8>,
     /// Device name, if available (up to 32 bytes)
-    pub name: Option<[u8; 32]>,
+    pub name: Option<String<32>>,
     /// Class of Device (`CoD`) indicating device type and capabilities
     pub class_of_device: Option<ClassOfDevice>,
 }
@@ -247,9 +247,38 @@ impl BluetoothDevice {
 
     /// Update device with new name information
     #[must_use]
-    pub fn with_name(mut self, name: [u8; 32]) -> Self {
+    pub fn with_name(mut self, name: String<32>) -> Self {
         self.name = Some(name);
         self
+    }
+
+    /// Update device with new name information from bytes
+    #[must_use]
+    pub fn with_name_bytes(mut self, name_bytes: [u8; 32]) -> Self {
+        if let Some(name) = Self::bytes_to_name_string(&name_bytes) {
+            self.name = Some(name);
+        }
+        self
+    }
+
+    /// Convert a 32-byte array to a heapless String, stopping at null terminator
+    ///
+    /// This utility function handles the conversion from raw byte arrays (as used in
+    /// Bluetooth protocols) to properly formatted UTF-8 strings.
+    ///
+    /// # Arguments
+    ///
+    /// * `name_bytes` - A 32-byte array containing the device name, possibly null-terminated
+    ///
+    /// # Returns
+    ///
+    /// * `Some(String<32>)` - If the bytes contain valid UTF-8 text
+    /// * `None` - If the bytes are not valid UTF-8 or the conversion fails
+    pub fn bytes_to_name_string(name_bytes: &[u8; 32]) -> Option<String<32>> {
+        // Find null terminator or use full length
+        let name_len = name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
+        let name_str = core::str::from_utf8(&name_bytes[..name_len]).ok()?;
+        String::try_from(name_str).ok()
     }
 
     /// Update device with class of device information
@@ -522,8 +551,8 @@ pub enum Response {
     State(BluetoothState),
     /// Local Bluetooth information
     LocalInfo(LocalDeviceInfo),
-    /// Device name (up to 32 bytes, null-terminated)
-    DeviceName(String<64>, [u8; 32]), // Address and name
+    /// Device name (up to 32 bytes)
+    DeviceName(String<64>, String<32>), // Address and name
     /// Error occurred
     Error(BluetoothError),
 }
@@ -604,19 +633,16 @@ mod tests {
     #[test]
     fn test_bluetooth_device_builder_pattern() {
         let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
-        let name = [
-            b'T', b'e', b's', b't', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0,
-        ];
+        let name_string = String::try_from("Test").unwrap();
 
         let device = BluetoothDevice::new(addr)
             .with_rssi(-50)
-            .with_name(name)
+            .with_name(name_string.clone())
             .with_class_of_device(ClassOfDevice::from_raw(0x240404));
 
         assert_eq!(device.addr, addr);
         assert_eq!(device.rssi, Some(-50));
-        assert_eq!(device.name, Some(name));
+        assert_eq!(device.name, Some(name_string));
         assert_eq!(
             device.class_of_device,
             Some(ClassOfDevice::from_raw(0x240404))
@@ -667,21 +693,25 @@ mod tests {
     fn test_bluetooth_device_name_handling() {
         let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
 
-        // Test with various name lengths
-        let short_name = [
+        // Test with various name lengths using the new string API
+        let short_name_bytes = [
             b'H', b'i', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0,
         ];
-        let full_name = [b'T'; 32]; // Full 32-byte name
-        let empty_name = [0u8; 32]; // Empty name
+        let full_name_str = "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"; // 32 'T' characters
+        let empty_name_bytes = [0u8; 32]; // Empty name
 
-        let device_short = BluetoothDevice::new(addr).with_name(short_name);
-        let device_full = BluetoothDevice::new(addr).with_name(full_name);
-        let device_empty = BluetoothDevice::new(addr).with_name(empty_name);
+        let device_short = BluetoothDevice::new(addr).with_name_bytes(short_name_bytes);
+        let device_full =
+            BluetoothDevice::new(addr).with_name(String::try_from(full_name_str).unwrap());
+        let device_empty = BluetoothDevice::new(addr).with_name_bytes(empty_name_bytes);
 
-        assert_eq!(device_short.name, Some(short_name));
-        assert_eq!(device_full.name, Some(full_name));
-        assert_eq!(device_empty.name, Some(empty_name));
+        assert_eq!(device_short.name, Some(String::try_from("Hi").unwrap()));
+        assert_eq!(
+            device_full.name,
+            Some(String::try_from(full_name_str).unwrap())
+        );
+        assert_eq!(device_empty.name, Some(String::try_from("").unwrap()));
     }
 
     #[test]

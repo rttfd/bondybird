@@ -68,7 +68,7 @@ use bt_hci::{
     param::EventMask,
     transport::Transport,
 };
-use heapless::Vec;
+use heapless::{String, Vec};
 
 /// `BluetoothHost` Core that handles all Bluetooth operations
 ///
@@ -153,7 +153,7 @@ impl BluetoothHost {
             }
             Request::GetDevices => {
                 let devices_vec: Vec<BluetoothDevice, { constants::MAX_DISCOVERED_DEVICES }> =
-                    self.devices.values().copied().collect();
+                    self.devices.values().cloned().collect();
                 Response::Devices(devices_vec)
             }
             Request::Pair(address) => match Self::parse_address(&address) {
@@ -179,7 +179,7 @@ impl BluetoothHost {
 
                 for (addr, _handle) in &self.connections {
                     if let Some(device) = self.devices.get(addr) {
-                        if paired_devices.push(*device).is_err() {
+                        if paired_devices.push(device.clone()).is_err() {
                             // If we can't add more devices, break (shouldn't happen with proper constants)
                             break;
                         }
@@ -292,7 +292,7 @@ impl BluetoothHost {
         &mut self,
         addr: BluetoothAddress,
         controller: &ExternalController<T, SLOTS>,
-    ) -> Result<[u8; 32], BluetoothError> {
+    ) -> Result<String<32>, BluetoothError> {
         // Use Remote Name Request to get the device name
         let remote_name_req = cmd::link_control::RemoteNameRequest::new(
             addr.into(),
@@ -305,8 +305,8 @@ impl BluetoothHost {
             // The response will come as a RemoteNameRequestComplete event
             // For now, check if we already have the name in our device cache
             if let Some(device) = self.devices.get(&addr) {
-                if let Some(name) = device.name {
-                    return Ok(name);
+                if let Some(ref name) = device.name {
+                    return Ok(name.clone());
                 }
             }
 
@@ -493,19 +493,22 @@ impl BluetoothHost {
     fn update_device_name(
         &mut self,
         addr: BluetoothAddress,
-        name: [u8; constants::MAX_DEVICE_NAME_LENGTH],
+        name_bytes: [u8; constants::MAX_DEVICE_NAME_LENGTH],
     ) {
-        if let Some(device) = self.devices.get_mut(&addr) {
-            device.name = Some(name);
-        } else {
-            // If the device doesn't exist, create a new entry
-            let new_device = BluetoothDevice {
-                addr,
-                rssi: None,
-                name: Some(name),
-                class_of_device: None,
-            };
-            self.devices.insert(addr, new_device).ok();
+        // Use the shared utility function to convert bytes to string
+        if let Some(name) = BluetoothDevice::bytes_to_name_string(&name_bytes) {
+            if let Some(device) = self.devices.get_mut(&addr) {
+                device.name = Some(name.clone());
+            } else {
+                // If the device doesn't exist, create a new entry
+                let new_device = BluetoothDevice {
+                    addr,
+                    rssi: None,
+                    name: Some(name),
+                    class_of_device: None,
+                };
+                self.devices.insert(addr, new_device).ok();
+            }
         }
     }
 
@@ -745,15 +748,11 @@ mod tests {
     fn test_add_or_update_device_new() {
         let mut host = create_test_host();
         let addr = create_test_address([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
-        let mut name = [0u8; constants::MAX_DEVICE_NAME_LENGTH];
-        name[0] = b'T';
-        name[1] = b'e';
-        name[2] = b's';
-        name[3] = b't';
+        let name = heapless::String::try_from("Test").unwrap();
         let device = BluetoothDevice {
             addr,
             rssi: Some(-50),
-            name: Some(name),
+            name: Some(name.clone()),
             class_of_device: Some(ClassOfDevice::from_raw(0x123456)),
         };
         host.upsert_device(device);
@@ -772,14 +771,8 @@ mod tests {
     fn test_add_or_update_device_existing() {
         let mut host = create_test_host();
         let addr = create_test_address([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
-        let mut original_name = [0u8; constants::MAX_DEVICE_NAME_LENGTH];
-        original_name[0] = b'O';
-        original_name[1] = b'l';
-        original_name[2] = b'd';
-        let mut new_name = [0u8; constants::MAX_DEVICE_NAME_LENGTH];
-        new_name[0] = b'N';
-        new_name[1] = b'e';
-        new_name[2] = b'w';
+        let original_name = heapless::String::try_from("Old").unwrap();
+        let new_name = heapless::String::try_from("New").unwrap();
         // Add initial device
         let device = BluetoothDevice {
             addr,
@@ -793,7 +786,7 @@ mod tests {
         let device = BluetoothDevice {
             addr,
             rssi: Some(-40),
-            name: Some(new_name),
+            name: Some(new_name.clone()),
             class_of_device: Some(ClassOfDevice::from_raw(0x111111)),
         };
         host.upsert_device(device);
@@ -812,16 +805,12 @@ mod tests {
     fn test_add_or_update_device_partial_update() {
         let mut host = create_test_host();
         let addr = create_test_address([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
-        let mut name = [0u8; constants::MAX_DEVICE_NAME_LENGTH];
-        name[0] = b'T';
-        name[1] = b'e';
-        name[2] = b's';
-        name[3] = b't';
+        let name = heapless::String::try_from("Test").unwrap();
         // Add initial device
         let device = BluetoothDevice {
             addr,
             rssi: Some(-60),
-            name: Some(name),
+            name: Some(name.clone()),
             class_of_device: Some(ClassOfDevice::from_raw(0x111111)),
         };
         host.upsert_device(device);
@@ -829,7 +818,7 @@ mod tests {
         let device = BluetoothDevice {
             addr,
             rssi: Some(-30),
-            name: Some(name),
+            name: Some(name.clone()),
             class_of_device: Some(ClassOfDevice::from_raw(0x111111)),
         };
         host.upsert_device(device);
@@ -1082,16 +1071,16 @@ mod tests {
             class_of_device: Some(ClassOfDevice::from_raw(0x123456)),
         };
         host.upsert_device(device);
-        let mut name = [0u8; constants::MAX_DEVICE_NAME_LENGTH];
-        name[0] = b'T';
-        name[1] = b'e';
-        name[2] = b's';
-        name[3] = b't';
+        let name = [
+            b'T', b'e', b's', b't', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+        ];
         host.update_device_name(addr, name);
 
         let device = host.devices.get(&addr).unwrap();
+        let expected_name = heapless::String::try_from("Test").unwrap();
         assert_eq!(device.rssi, Some(-55)); // Last RSSI update
-        assert_eq!(device.name, Some(name)); // Name from last update
+        assert_eq!(device.name, Some(expected_name)); // Name from last update
         assert_eq!(
             device.class_of_device,
             Some(ClassOfDevice::from_raw(0x123456))
