@@ -151,7 +151,7 @@ pub async fn get_paired_devices()
 ///
 /// # Returns
 ///
-/// * `Ok((address, name))` - The device address and name (32-byte array, null-terminated)
+/// * `Ok((address, name))` - The device address and name as a heapless string
 /// * `Err(BluetoothError)` - If the request fails or the device is not found
 ///
 /// # Errors
@@ -172,16 +172,13 @@ pub async fn get_paired_devices()
 /// let address: String<64> = String::try_from("12:34:56:78:9A:BC").unwrap();
 /// let (addr, name) = get_device_name(address).await?;
 ///
-/// // Convert name bytes to string (find null terminator)
-/// let name_len = name.iter().position(|&b| b == 0).unwrap_or(32);
-/// let name_str = core::str::from_utf8(&name[..name_len]).unwrap_or("Invalid UTF-8");
-/// println!("Device {} is named: {}", addr.as_str(), name_str);
+/// println!("Device {} is named: {}", addr.as_str(), name.as_str());
 /// # Ok(())
 /// # }
 /// ```
 pub async fn get_device_name(
     address: String<64>,
-) -> Result<(String<64>, [u8; 32]), BluetoothError> {
+) -> Result<(String<64>, String<32>), BluetoothError> {
     REQUEST_CHANNEL
         .sender()
         .send(Request::GetDeviceName(address))
@@ -247,15 +244,12 @@ mod tests {
     fn test_response_enum_variants() {
         let test_device = create_test_device();
         let mut devices = heapless::Vec::new();
-        devices.push(test_device).unwrap();
+        devices.push(test_device.clone()).unwrap();
 
         let mut paired_devices = heapless::Vec::new();
         paired_devices.push(test_device).unwrap();
 
-        let test_name = [
-            b'T', b'e', b's', b't', b' ', b'D', b'e', b'v', b'i', b'c', b'e', 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        ];
+        let test_name = heapless::String::try_from("Test Device").unwrap();
 
         // Test that all Response variants can be created
         let responses = [
@@ -296,17 +290,13 @@ mod tests {
         }
 
         // Verify that Response enum includes DeviceName
-        let test_name = [
-            b'T', b'e', b's', b't', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0,
-        ];
+        let test_name = heapless::String::try_from("Test").unwrap();
 
-        let response = Response::DeviceName(address, test_name);
+        let response = Response::DeviceName(address, test_name.clone());
         match response {
             Response::DeviceName(addr, name) => {
                 assert_eq!(addr.as_str(), "12:34:56:78:9A:BC");
-                assert_eq!(&name[0..4], b"Test");
-                assert_eq!(name[4], 0); // Null terminator
+                assert_eq!(name.as_str(), "Test");
             }
             _ => panic!("DeviceName variant should exist"),
         }
@@ -314,32 +304,26 @@ mod tests {
 
     #[test]
     fn test_device_name_encoding() {
-        // Test that device names are properly handled as byte arrays
+        // Test that device names are properly handled as heapless strings
         let test_names = [
-            // ASCII name
-            [
-                b'M', b'y', b' ', b'H', b'e', b'a', b'd', b's', b'e', b't', 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            ],
-            // Empty name (all zeros)
-            [0u8; 32],
-            // Name with international characters (UTF-8 encoded)
-            [
-                0xC3, 0xA4, 0xC3, 0xB6, 0xC3, 0xBC, b'_', b'd', b'e', b'v', b'i', b'c', b'e', 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            ],
+            "My Headset",
+            "",                                // Empty name
+            "äöü_device",                      // International characters
+            "1234567890123456789012345678901", // Near max length (31 chars)
         ];
 
-        for name in test_names {
-            let addr_str = heapless::String::try_from("AA:BB:CC:DD:EE:FF").unwrap();
-            let response = Response::DeviceName(addr_str.clone(), name);
+        for name_str in test_names {
+            if let Ok(name) = heapless::String::<32>::try_from(name_str) {
+                let addr_str = heapless::String::try_from("AA:BB:CC:DD:EE:FF").unwrap();
+                let response = Response::DeviceName(addr_str.clone(), name.clone());
 
-            match response {
-                Response::DeviceName(addr, received_name) => {
-                    assert_eq!(addr.as_str(), "AA:BB:CC:DD:EE:FF");
-                    assert_eq!(received_name, name);
+                match response {
+                    Response::DeviceName(addr, received_name) => {
+                        assert_eq!(addr.as_str(), "AA:BB:CC:DD:EE:FF");
+                        assert_eq!(received_name.as_str(), name_str);
+                    }
+                    _ => panic!("Should be DeviceName response"),
                 }
-                _ => panic!("Should be DeviceName response"),
             }
         }
     }
