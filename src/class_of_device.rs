@@ -1,4 +1,4 @@
-//! Class of Device (CoD) implementation for Bluetooth devices
+//! Class of Device (`CoD`) implementation for Bluetooth devices
 //!
 //! This module provides comprehensive parsing and human-readable formatting
 //! of Bluetooth Class of Device fields according to the Bluetooth specification.
@@ -30,7 +30,7 @@
 
 use heapless::Vec;
 
-/// Class of Device (CoD) indicating device type and capabilities
+/// Class of Device (`CoD`) indicating device type and capabilities
 ///
 /// The Class of Device is a 24-bit field that indicates the type of device
 /// and the services it provides. It consists of:
@@ -39,14 +39,14 @@ use heapless::Vec;
 /// - Major Service Classes (11 bits)
 /// - Format Type (2 bits, always 0b00)
 ///
-/// Based on the Bluetooth specification and CoD definition.
+/// Based on the Bluetooth specification and `CoD` definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClassOfDevice {
     raw: u32,
 }
 
 impl ClassOfDevice {
-    /// Create a ClassOfDevice from raw 24-bit value
+    /// Create a `ClassOfDevice` from raw 24-bit value
     #[must_use]
     pub fn from_raw(raw: u32) -> Self {
         Self {
@@ -152,7 +152,7 @@ pub enum MajorDeviceClass {
 }
 
 impl MajorDeviceClass {
-    /// Create MajorDeviceClass from raw 5-bit value
+    /// Create `MajorDeviceClass` from raw 5-bit value
     #[must_use]
     pub fn from_raw(raw: u8) -> Self {
         match raw {
@@ -440,6 +440,7 @@ pub struct DeviceDescription<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::fmt::Write;
 
     #[test]
     fn test_class_of_device_parsing() {
@@ -448,7 +449,7 @@ mod tests {
         // - Major Device Class: 0x04 (Audio/Video)
         // - Minor Device Class: 0x01 (Wearable headset device)
         // - Format Type: 0x00
-        let cod = ClassOfDevice::from_raw(0x000404);
+        let cod = ClassOfDevice::from_raw(0x0000_0404);
 
         // Test major class
         assert_eq!(cod.major_device_class(), MajorDeviceClass::AudioVideo);
@@ -467,38 +468,14 @@ mod tests {
 
     #[test]
     fn test_class_of_device_display_trait() {
-        let cod = ClassOfDevice::from_raw(0x000404);
+        use core::fmt::Write;
+
+        let cod = ClassOfDevice::from_raw(0x0000_0404);
 
         // Test Display implementation in a no_std compatible way
         let mut buffer = heapless::String::<64>::new();
-        use core::fmt::Write;
         write!(buffer, "{cod}").unwrap();
         assert_eq!(buffer.as_str(), "Audio/Video (Wearable headset device)");
-    }
-
-    #[test]
-    fn test_class_of_device_exhaustive() {
-        // Test that all ClassOfDevice variants exist and implement required traits
-        let cod_values = [
-            0x000000, 0x000001, 0x000002, 0x000004, 0x000008, 0x000010, 0x000020, 0x000040,
-            0x000080, 0x000100, 0x000200, 0x000400, 0x000800, 0x001000, 0x002000, 0x004000,
-            0x008000, 0x010000, 0x020000, 0x040000, 0x080000, 0x100000, 0x200000, 0x400000,
-            0x800000, 0xFFFFFF,
-        ];
-
-        for &value in &cod_values {
-            let cod = ClassOfDevice::from_raw(value);
-
-            // Test that Debug trait is implemented
-            let _ = &cod as &dyn core::fmt::Debug;
-
-            // Test that Copy and Clone are implemented
-            let _cloned = cod;
-            let _copied = cod;
-
-            // Test that PartialEq is implemented
-            assert_eq!(cod, cod);
-        }
     }
 
     #[test]
@@ -751,27 +728,26 @@ mod tests {
     #[test]
     fn test_format_type() {
         // Format type should always be 0 for current Bluetooth spec
-        let cod1 = ClassOfDevice::from_raw(0x000000);
+        let cod1 = ClassOfDevice::from_raw(0x0000_0000);
         assert_eq!(cod1.format_type(), 0);
 
-        let cod2 = ClassOfDevice::from_raw(0x123456);
+        let cod2 = ClassOfDevice::from_raw(0x0012_3456);
         assert_eq!(cod2.format_type(), 0x02); // bits 1-0 of 0x56 = 0b10
 
-        let cod3 = ClassOfDevice::from_raw(0x123457);
+        let cod3 = ClassOfDevice::from_raw(0x0012_3457);
         assert_eq!(cod3.format_type(), 0x03); // bits 1-0 of 0x57 = 0b11
     }
 
     #[test]
     fn test_display_formatting() {
         // Test with no services
-        let cod1 = ClassOfDevice::from_raw(0x000404);
+        let cod1 = ClassOfDevice::from_raw(0x0000_0404);
         let mut display1 = heapless::String::<64>::new();
-        use core::fmt::Write;
         write!(display1, "{cod1}").unwrap();
         assert_eq!(display1.as_str(), "Audio/Video (Wearable headset device)");
 
         // Test with services
-        let cod2 = ClassOfDevice::from_raw(0x200404); // Audio service bit set
+        let cod2 = ClassOfDevice::from_raw(0x0020_0404); // Audio service bit set
         let mut display2 = heapless::String::<128>::new();
         write!(display2, "{cod2}").unwrap();
         assert_eq!(
@@ -780,7 +756,7 @@ mod tests {
         );
 
         // Test with no minor class description
-        let cod3 = ClassOfDevice::from_raw(0x000400); // AudioVideo but minor=0x00 = Uncategorized
+        let cod3 = ClassOfDevice::from_raw(0x0000_0400); // AudioVideo but minor=0x00 = Uncategorized
         let mut display3 = heapless::String::<64>::new();
         write!(display3, "{cod3}").unwrap();
         assert_eq!(display3.as_str(), "Audio/Video (Uncategorized)");

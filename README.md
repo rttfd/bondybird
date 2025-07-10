@@ -79,8 +79,8 @@ async fn main(spawner: Spawner) {
     let controller_ref = Box::leak(Box::new(controller));
     
     // Spawn both tasks for parallel processing
-    spawner.spawn(hci_event_processor(controller_ref)).unwrap();
-    spawner.spawn(api_request_processor(controller_ref)).unwrap();
+    spawner.spawn(hci_event_processor::<YourTransport, 4, 512>(controller_ref)).unwrap();
+    spawner.spawn(api_request_processor::<YourTransport, 4>(controller_ref)).unwrap();
     
     // Use API functions from anywhere in your application
     let _ = api::start_discovery().await;

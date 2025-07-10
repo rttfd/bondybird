@@ -2,6 +2,24 @@
 //!
 //! This module contains the main processing tasks that handle HCI events and API requests
 //! in parallel. Both tasks share the `BluetoothHost` state via a mutex for thread-safe access.
+//!
+//! # Usage
+//!
+//! These processor tasks should be spawned as separate Embassy tasks:
+//!
+//! ```ignore
+//! use bondybird::processor::{hci_event_processor, api_request_processor};
+//!
+//! // In your Embassy spawner
+//! spawner.spawn(hci_event_processor::<Transport, 4, 512>(controller)).unwrap();
+//! spawner.spawn(api_request_processor::<Transport, 4>(controller)).unwrap();
+//! ```
+//!
+//! # Generic Parameters
+//!
+//! * `T: Transport` - The HCI transport layer (UART, USB, etc.)
+//! * `SLOTS` - Maximum number of controller command slots (typically 4-8)
+//! * `BUFFER_SIZE` - Size of HCI read buffer in bytes (512+ recommended)
 
 use crate::{BluetoothState, REQUEST_CHANNEL, RESPONSE_CHANNEL, bluetooth_host};
 use bt_hci::{
@@ -11,10 +29,32 @@ use bt_hci::{
 };
 
 /// HCI Event Processor Task
-pub async fn hci_event_processor<T: Transport + 'static, const SLOTS: usize>(
+///
+/// Processes incoming HCI events from the Bluetooth controller in a continuous loop.
+/// This task handles all types of HCI packets including events, ACL data, synchronous data, and ISO data.
+///
+/// # Generic Parameters
+///
+/// * `T` - Transport layer implementation for HCI communication
+/// * `SLOTS` - Maximum number of controller slots for command queuing
+/// * `BUFFER_SIZE` - Size of the read buffer for incoming HCI packets (typically 512 or larger)
+///
+/// # Arguments
+///
+/// * `controller` - Reference to the external Bluetooth controller
+///
+/// # Behavior
+///
+/// This function runs indefinitely, continuously reading HCI packets from the controller
+/// and dispatching them to the appropriate handlers in the `BluetoothHost`.
+pub async fn hci_event_processor<
+    T: Transport + 'static,
+    const SLOTS: usize,
+    const BUFFER_SIZE: usize,
+>(
     controller: &'static ExternalController<T, SLOTS>,
 ) -> ! {
-    let mut read_buffer = [0u8; 256];
+    let mut read_buffer = [0u8; BUFFER_SIZE];
 
     loop {
         defmt::debug!("[PROCESSOR] Waiting for HCI event...");
@@ -45,6 +85,25 @@ pub async fn hci_event_processor<T: Transport + 'static, const SLOTS: usize>(
 }
 
 /// API Request Processor Task
+///
+/// Processes API requests from the application and coordinates with the Bluetooth controller.
+/// This task initializes the `BluetoothHost` on startup and then continuously processes
+/// incoming API requests, sending responses back through the response channel.
+///
+/// # Generic Parameters
+///
+/// * `T` - Transport layer implementation for HCI communication
+/// * `SLOTS` - Maximum number of controller slots for command queuing
+///
+/// # Arguments
+///
+/// * `controller` - Reference to the external Bluetooth controller
+///
+/// # Behavior
+///
+/// 1. Initializes the `BluetoothHost` with the provided controller
+/// 2. Runs indefinitely, processing API requests and sending responses
+/// 3. Handles `BluetoothHost` initialization errors gracefully
 pub async fn api_request_processor<T: Transport + 'static, const SLOTS: usize>(
     controller: &'static ExternalController<T, SLOTS>,
 ) -> ! {

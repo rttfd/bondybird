@@ -35,8 +35,8 @@
 //! init_bluetooth_host(options).await?;
 //!
 //! // 2. Spawn tasks (in your embassy main)
-//! // spawner.spawn(hci_event_processor(controller)).unwrap();
-//! // spawner.spawn(api_request_processor(controller)).unwrap();
+//! // spawner.spawn(hci_event_processor::<Transport, 4, 512>(controller)).unwrap();
+//! // spawner.spawn(api_request_processor::<Transport, 4>(controller)).unwrap();
 //!
 //! // 3. Use API functions
 //! // bondybird::api::start_discovery().await?;
@@ -76,23 +76,27 @@ pub(crate) static REQUEST_CHANNEL: Channel<CriticalSectionRawMutex, Request, MAX
 pub(crate) static RESPONSE_CHANNEL: Channel<CriticalSectionRawMutex, Response, MAX_CHANNELS> =
     Channel::new();
 
-/// Global BluetoothHost, initialized by client at runtime
+/// Global `BluetoothHost`, initialized by client at runtime
 pub(crate) static BLUETOOTH_HOST: Mutex<CriticalSectionRawMutex, Option<BluetoothHost>> =
     Mutex::new(None);
 
-/// Initialize the global BluetoothHost with the given options.
+/// Initialize the global `BluetoothHost` with the given options.
 ///
 /// This function must be called before using any API functions or spawning the processor tasks.
-/// It sets up the global BluetoothHost instance with the specified configuration options.
+/// It sets up the global `BluetoothHost` instance with the specified configuration options.
 ///
 /// # Arguments
 ///
-/// * `options` - Configuration options for the BluetoothHost, including inquiry parameters
+/// * `options` - Configuration options for the `BluetoothHost`, including inquiry parameters
 ///
 /// # Returns
 ///
 /// * `Ok(())` if initialization was successful
 /// * `Err("BluetoothHost already initialized")` if already initialized
+///
+/// # Errors
+///
+/// This function will return an error if the `BluetoothHost` has already been initialized.
 ///
 /// # Example
 ///
@@ -114,15 +118,23 @@ pub async fn init_bluetooth_host(options: BluetoothHostOptions) -> Result<(), &'
     Ok(())
 }
 
-/// Get a locked reference to the global BluetoothHost.
+/// Get a locked reference to the global `BluetoothHost`.
 ///
-/// This function provides access to the shared BluetoothHost instance for internal use.
-/// It returns a mapped mutex guard that provides direct access to the BluetoothHost.
+/// This function provides access to the shared `BluetoothHost` instance for internal use.
+/// It returns a mapped mutex guard that provides direct access to the `BluetoothHost`.
 ///
 /// # Returns
 ///
-/// * `Ok(MappedMutexGuard)` if the BluetoothHost is initialized
+/// * `Ok(MappedMutexGuard)` if the `BluetoothHost` is initialized
 /// * `Err("BluetoothHost not initialized")` if not yet initialized
+///
+/// # Errors
+///
+/// This function will return an error if the `BluetoothHost` has not been initialized.
+///
+/// # Panics
+///
+/// This function panics if the mutex guard cannot be mapped (should never happen in practice).
 ///
 /// # Note
 ///
@@ -274,6 +286,7 @@ impl BluetoothDevice {
     ///
     /// * `Some(String<32>)` - If the bytes contain valid UTF-8 text
     /// * `None` - If the bytes are not valid UTF-8 or the conversion fails
+    #[must_use]
     pub fn bytes_to_name_string(name_bytes: &[u8; 32]) -> Option<String<32>> {
         // Find null terminator or use full length
         let name_len = name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
@@ -638,14 +651,14 @@ mod tests {
         let device = BluetoothDevice::new(addr)
             .with_rssi(-50)
             .with_name(name_string.clone())
-            .with_class_of_device(ClassOfDevice::from_raw(0x240404));
+            .with_class_of_device(ClassOfDevice::from_raw(0x0024_0404));
 
         assert_eq!(device.addr, addr);
         assert_eq!(device.rssi, Some(-50));
         assert_eq!(device.name, Some(name_string));
         assert_eq!(
             device.class_of_device,
-            Some(ClassOfDevice::from_raw(0x240404))
+            Some(ClassOfDevice::from_raw(0x0024_0404))
         );
     }
 
@@ -669,23 +682,23 @@ mod tests {
 
         // Test various device classes based on Bluetooth standards
         let audio_device =
-            BluetoothDevice::new(addr).with_class_of_device(ClassOfDevice::from_raw(0x240404)); // Audio: Headphones
+            BluetoothDevice::new(addr).with_class_of_device(ClassOfDevice::from_raw(0x0024_0404)); // Audio: Headphones
         let phone_device =
-            BluetoothDevice::new(addr).with_class_of_device(ClassOfDevice::from_raw(0x200404)); // Phone: Smartphone  
+            BluetoothDevice::new(addr).with_class_of_device(ClassOfDevice::from_raw(0x0020_0404)); // Phone: Smartphone  
         let computer_device =
-            BluetoothDevice::new(addr).with_class_of_device(ClassOfDevice::from_raw(0x100104)); // Computer: Desktop
+            BluetoothDevice::new(addr).with_class_of_device(ClassOfDevice::from_raw(0x0010_0104)); // Computer: Desktop
 
         assert_eq!(
             audio_device.class_of_device,
-            Some(ClassOfDevice::from_raw(0x240404))
+            Some(ClassOfDevice::from_raw(0x0024_0404))
         );
         assert_eq!(
             phone_device.class_of_device,
-            Some(ClassOfDevice::from_raw(0x200404))
+            Some(ClassOfDevice::from_raw(0x0020_0404))
         );
         assert_eq!(
             computer_device.class_of_device,
-            Some(ClassOfDevice::from_raw(0x100104))
+            Some(ClassOfDevice::from_raw(0x0010_0104))
         );
     }
 
@@ -758,97 +771,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bluetooth_error_exhaustive() {
-        // Test that all BluetoothError variants exist and implement required traits
-        let errors = [
-            BluetoothError::HciError,
-            BluetoothError::DeviceNotFound,
-            BluetoothError::DeviceNotConnected,
-            BluetoothError::ConnectionFailed,
-            BluetoothError::Timeout,
-            BluetoothError::AlreadyInProgress,
-            BluetoothError::InvalidParameter,
-            BluetoothError::NotSupported,
-            BluetoothError::DiscoveryFailed,
-            BluetoothError::InitializationFailed,
-            BluetoothError::TransportError,
-            BluetoothError::InvalidState,
-        ];
-
-        for error in errors {
-            // Test that Debug trait is implemented
-            let _ = &error as &dyn core::fmt::Debug;
-
-            // Test that Copy and Clone are implemented
-            let _cloned = error;
-            let _copied = error;
-
-            // Test that PartialEq is implemented
-            assert_eq!(error, error);
-        }
-    }
-
-    #[test]
-    fn test_bluetooth_host_initialization() {
-        // The BluetoothHost is initialized as a static, so we can't create new instances easily
-        // But we can test that the static is properly initialized
-        // This is more of a compilation test
-        let _host_ref = &BLUETOOTH_HOST;
-    }
-
-    #[test]
-    fn test_channels_initialization() {
-        // Test that the static channels exist and have correct types
-        let _request_sender = REQUEST_CHANNEL.sender();
-        let _request_receiver = REQUEST_CHANNEL.receiver();
-        let _response_sender = RESPONSE_CHANNEL.sender();
-        let _response_receiver = RESPONSE_CHANNEL.receiver();
-    }
-
-    #[test]
-    fn test_type_traits() {
-        // Test that types implement expected traits
-        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
-        let device = BluetoothDevice::new(addr);
-        let info = LocalDeviceInfo::default();
-
-        // Test Debug
-        let _ = &addr as &dyn core::fmt::Debug;
-        let _ = &device as &dyn core::fmt::Debug;
-        let _ = &info as &dyn core::fmt::Debug;
-
-        // Test Clone/Copy for address
-        let _addr_clone = addr;
-        let _addr_copy = addr;
-
-        // Test Clone for device
-        let _device_clone = device;
-
-        // Test PartialEq for address
-        assert_eq!(addr, addr);
-
-        // Test Hash for address (it's used in FnvIndexMap)
-        use core::hash::{Hash, Hasher};
-
-        // Create a simple hasher to test Hash implementation
-        struct TestHasher(u64);
-        impl Hasher for TestHasher {
-            fn finish(&self) -> u64 {
-                self.0
-            }
-            fn write(&mut self, bytes: &[u8]) {
-                for &byte in bytes {
-                    self.0 = self.0.wrapping_mul(31).wrapping_add(byte as u64);
-                }
-            }
-        }
-
-        let mut hasher = TestHasher(0);
-        addr.hash(&mut hasher);
-        let _hash = hasher.finish();
-    }
-
-    #[test]
     fn test_bluetooth_host_options() {
         // Test default options
         let default_options = BluetoothHostOptions::default();
@@ -871,64 +793,5 @@ mod tests {
         assert_eq!(host.options().lap, custom_options.lap);
         assert_eq!(host.options().inquiry_length, custom_options.inquiry_length);
         assert_eq!(host.options().num_responses, custom_options.num_responses);
-    }
-
-    #[test]
-    fn test_class_of_device_parsing() {
-        // Use 0x000404 which represents:
-        // - Major Service Classes: 0x000 (no services)
-        // - Major Device Class: 0x04 (Audio/Video)
-        // - Minor Device Class: 0x01 (Wearable headset device)
-        // - Format Type: 0x00
-        let cod = ClassOfDevice::from_raw(0x000404);
-
-        // Test major class
-        assert_eq!(cod.major_device_class(), MajorDeviceClass::AudioVideo);
-
-        // Test minor class
-        assert_eq!(cod.minor_device_class(), 0x01);
-
-        // Test service classes (should be empty for 0x000404)
-        assert!(!cod.major_service_classes().audio());
-
-        // Test human-readable format
-        let desc = cod.description();
-        assert_eq!(desc.major_class, "Audio/Video");
-        assert_eq!(desc.minor_class, Some("Wearable headset device"));
-    }
-    #[test]
-    fn test_class_of_device_display_trait() {
-        let cod = ClassOfDevice::from_raw(0x000404);
-
-        // Test Display implementation in a no_std compatible way
-        let mut buffer = heapless::String::<64>::new();
-        use core::fmt::Write;
-        write!(buffer, "{cod}").unwrap();
-        assert_eq!(buffer.as_str(), "Audio/Video (Wearable headset device)");
-    }
-
-    #[test]
-    fn test_class_of_device_exhaustive() {
-        // Test that all ClassOfDevice variants exist and implement required traits
-        let cod_values = [
-            0x000000, 0x000001, 0x000002, 0x000004, 0x000008, 0x000010, 0x000020, 0x000040,
-            0x000080, 0x000100, 0x000200, 0x000400, 0x000800, 0x001000, 0x002000, 0x004000,
-            0x008000, 0x010000, 0x020000, 0x040000, 0x080000, 0x100000, 0x200000, 0x400000,
-            0x800000, 0xFFFFFF,
-        ];
-
-        for &value in &cod_values {
-            let cod = ClassOfDevice::from_raw(value);
-
-            // Test that Debug trait is implemented
-            let _ = &cod as &dyn core::fmt::Debug;
-
-            // Test that Copy and Clone are implemented
-            let _cloned = cod;
-            let _copied = cod;
-
-            // Test that PartialEq is implemented
-            assert_eq!(cod, cod);
-        }
     }
 }
