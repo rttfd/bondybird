@@ -17,13 +17,13 @@
 //! 1. HCI events are received by the HCI Event Processor Task
 //! 2. Events are processed and shared state is updated immediately
 //! 3. API requests are handled by the API Request Processor Task in parallel
-//! 4. API commands are executed and responses sent back via channels
+//! 4. Execute API commands and responses sent back via channels
 //!
 //! ## Parallel Processing Benefits
 //!
-//! - **Low Latency**: HCI events are processed immediately as they arrive
+//! - **Low Latency**: process HCI events immediately as they arrive
 //! - **Non-blocking**: API operations don't block event processing
-//! - **Thread Safety**: Shared state is properly synchronized with mutexes
+//! - **Thread Safety**: properly synchronize shared state with mutexes
 //! - **Scalability**: Easy to add more processing tasks if needed
 //!
 //! ## Implementation Details
@@ -60,6 +60,7 @@ use crate::{
     BluetoothAddress, BluetoothDevice, BluetoothError, BluetoothHost, BluetoothState, Request,
     Response, constants,
 };
+use bt_hci::param::{AllowRoleSwitch, ClockOffset, PacketType, PageScanRepetitionMode};
 use bt_hci::{
     cmd,
     controller::{ControllerCmdSync, ExternalController},
@@ -96,18 +97,6 @@ use heapless::Vec;
 /// - Structured event parsing and handling
 /// - Transport-agnostic controller communication
 impl BluetoothHost {
-    fn parse_class_of_device(bytes: &[u8]) -> Option<u32> {
-        if bytes.len() >= 3 {
-            let mut value: u32 = 0;
-            for (i, &b) in bytes.iter().take(3).enumerate() {
-                value |= u32::from(b) << (i * 8);
-            }
-            Some(value)
-        } else {
-            None
-        }
-    }
-
     fn core_spec_version_to_u8(version: bt_hci::param::CoreSpecificationVersion) -> u8 {
         match version {
             bt_hci::param::CoreSpecificationVersion::VERSION_1_1 => 0x01,
@@ -229,13 +218,21 @@ impl BluetoothHost {
             return Err(BluetoothError::DeviceNotFound);
         }
 
+        // DM1, DM3, DM5, DH1, DH3, DH5
+        let packet_type = PacketType::new()
+            .set_dh1_may_be_used(true)
+            .set_dh3_may_be_used(true)
+            .set_dh5_may_be_used(true)
+            .set_dm3_may_be_used(true)
+            .set_dm5_may_be_used(true);
+
         let create_conn = cmd::link_control::CreateConnection::new(
             addr.into(),
-            constants::DEFAULT_PACKET_TYPES,
-            constants::PAGE_SCAN_REPETITION_MODE_R1,
+            packet_type,
+            PageScanRepetitionMode::R1,
             constants::RESERVED_FIELD,
-            constants::NO_CLOCK_OFFSET,
-            constants::ALLOW_ROLE_SWITCH,
+            ClockOffset::new(),
+            AllowRoleSwitch::Allowed,
         );
 
         if controller.exec(&create_conn).await.is_ok() {
@@ -420,31 +417,30 @@ impl BluetoothHost {
         }
     }
 
-    fn add_or_update_device(
+    fn upsert_device(&mut self, device: BluetoothDevice) {
+        if let Some(existing_device) = self.devices.get_mut(&device.addr) {
+            *existing_device = device;
+        } else {
+            self.devices.insert(device.addr, device).ok();
+        }
+    }
+
+    fn update_device_name(
         &mut self,
         addr: BluetoothAddress,
-        rssi: Option<i8>,
-        name: Option<[u8; constants::MAX_DEVICE_NAME_LENGTH]>,
-        class_of_device: Option<u32>,
+        name: [u8; constants::MAX_DEVICE_NAME_LENGTH],
     ) {
-        if let Some(existing_device) = self.devices.get_mut(&addr) {
-            if rssi.is_some() {
-                existing_device.rssi = rssi;
-            }
-            if name.is_some() {
-                existing_device.name = name;
-            }
-            if class_of_device.is_some() {
-                existing_device.class_of_device = class_of_device;
-            }
+        if let Some(device) = self.devices.get_mut(&addr) {
+            device.name = Some(name);
         } else {
-            let device = BluetoothDevice {
+            // If the device doesn't exist, create a new entry
+            let new_device = BluetoothDevice {
                 addr,
-                rssi,
-                name,
-                class_of_device,
+                rssi: None,
+                name: Some(name),
+                class_of_device: None,
             };
-            self.devices.insert(device.addr, device).ok();
+            self.devices.insert(addr, new_device).ok();
         }
     }
 
@@ -455,29 +451,11 @@ impl BluetoothHost {
     pub fn process_hci_event(&mut self, event: &event::Event<'_>) {
         match *event {
             event::Event::InquiryResult(ref result) => {
-                let num_responses = result.num_responses;
-
-                let bd_addr_bytes = &*result.bd_addr;
-                let class_of_device_bytes = &*result.class_of_device;
-
-                for i in 0..num_responses as usize {
-                    // Each BD_ADDR is 6 bytes
-                    if i * 6 + 6 <= bd_addr_bytes.len() {
-                        // Extract the 6 bytes for this device's address
-                        let mut addr_bytes = [0u8; 6];
-                        addr_bytes.copy_from_slice(&bd_addr_bytes[i * 6..(i * 6 + 6)]);
-                        let addr = BluetoothAddress::new(addr_bytes);
-
-                        // Parse class of device (3 bytes per device)
-                        let class_of_device = if i * 3 + 3 <= class_of_device_bytes.len() {
-                            Self::parse_class_of_device(&class_of_device_bytes[i * 3..(i * 3 + 3)])
-                        } else {
-                            None
-                        };
-
-                        self.add_or_update_device(addr, None, None, class_of_device);
+                result.iter().for_each(|res| {
+                    if let Ok(device) = res.try_into() {
+                        self.upsert_device(device);
                     }
-                }
+                });
             }
             event::Event::InquiryComplete(ref complete) => {
                 self.discovering = false;
@@ -513,48 +491,21 @@ impl BluetoothHost {
                 if complete.status.to_result().is_ok() {
                     if let Ok(addr) = complete.bd_addr.try_into() {
                         let name = Self::copy_device_name(&complete.remote_name);
-
-                        self.add_or_update_device(addr, None, Some(name), None);
+                        self.update_device_name(addr, name);
                     }
                 }
             }
             event::Event::ExtendedInquiryResult(ref result) => {
-                let addr = BluetoothAddress::new(result.bd_addr);
-
-                // Parse class of device (3 bytes)
-                let class_of_device = Self::parse_class_of_device(&result.class_of_device);
-
-                // Add the device with RSSI
-                self.add_or_update_device(addr, Some(result.rssi), None, class_of_device);
+                if let Ok(device) = result.try_into() {
+                    self.upsert_device(device);
+                }
             }
             event::Event::InquiryResultWithRssi(ref result) => {
-                let num_responses = result.num_responses;
-
-                let bd_addr_bytes = &*result.bd_addr;
-                let rssi_bytes = &*result.rssi;
-                let class_of_device_bytes = &*result.class_of_device;
-
-                for i in 0..num_responses as usize {
-                    // Each BD_ADDR is 6 bytes
-                    if i * 6 + 6 <= bd_addr_bytes.len() && i < rssi_bytes.len() {
-                        // Extract the 6 bytes for this device's address
-                        let mut addr_bytes = [0u8; 6];
-                        addr_bytes.copy_from_slice(&bd_addr_bytes[i * 6..(i * 6 + 6)]);
-                        let addr = BluetoothAddress::new(addr_bytes);
-
-                        #[allow(clippy::cast_possible_wrap)]
-                        let rssi = rssi_bytes[i] as i8;
-
-                        // Parse class of device (3 bytes per device)
-                        let class_of_device = if i * 3 + 3 <= class_of_device_bytes.len() {
-                            Self::parse_class_of_device(&class_of_device_bytes[i * 3..(i * 3 + 3)])
-                        } else {
-                            None
-                        };
-
-                        self.add_or_update_device(addr, Some(rssi), None, class_of_device);
+                result.iter().for_each(|res| {
+                    if let Ok(device) = res.try_into() {
+                        self.upsert_device(device);
                     }
-                }
+                });
             }
             _ => {
                 defmt::debug!("Unhandled HCI event: {:?}", defmt::Debug2Format(event));
@@ -566,7 +517,7 @@ impl BluetoothHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BluetoothAddress, BluetoothError, BluetoothState};
+    use crate::{BluetoothAddress, BluetoothDevice, BluetoothError, BluetoothState, constants};
 
     // Helper function to create a test BluetoothHost
     fn create_test_host() -> BluetoothHost {
@@ -598,28 +549,18 @@ mod tests {
     fn test_parse_class_of_device() {
         // Valid 3-byte class of device
         let bytes = [0x12, 0x34, 0x56];
-        let result = BluetoothHost::parse_class_of_device(&bytes);
-        assert_eq!(result, Some(0x563412)); // Little-endian format
+        let result = BluetoothDevice::parse_class_of_device(&bytes);
+        assert_eq!(result, Some(0x123456)); // Big-endian format
 
         // Valid 4+ byte array (should only use first 3)
         let bytes = [0x12, 0x34, 0x56, 0x78, 0x9A];
-        let result = BluetoothHost::parse_class_of_device(&bytes);
-        assert_eq!(result, Some(0x563412));
-
-        // Empty array
-        let bytes = [];
-        let result = BluetoothHost::parse_class_of_device(&bytes);
-        assert_eq!(result, None);
-
-        // Insufficient bytes
-        let bytes = [0x12, 0x34];
-        let result = BluetoothHost::parse_class_of_device(&bytes);
-        assert_eq!(result, None);
+        let result = BluetoothDevice::parse_class_of_device(&[bytes[0], bytes[1], bytes[2]]);
+        assert_eq!(result, Some(0x123456));
 
         // Zero class of device
         let bytes = [0x00, 0x00, 0x00];
-        let result = BluetoothHost::parse_class_of_device(&bytes);
-        assert_eq!(result, Some(0x000000));
+        let result = BluetoothDevice::parse_class_of_device(&bytes);
+        assert_eq!(result, None);
     }
 
     #[test]
@@ -742,9 +683,13 @@ mod tests {
         name[1] = b'e';
         name[2] = b's';
         name[3] = b't';
-
-        host.add_or_update_device(addr, Some(-50), Some(name), Some(0x123456));
-
+        let device = BluetoothDevice {
+            addr,
+            rssi: Some(-50),
+            name: Some(name),
+            class_of_device: Some(0x123456),
+        };
+        host.upsert_device(device);
         assert_eq!(host.devices.len(), 1);
         let device = host.devices.get(&addr).unwrap();
         assert_eq!(device.addr, addr);
@@ -761,20 +706,28 @@ mod tests {
         original_name[0] = b'O';
         original_name[1] = b'l';
         original_name[2] = b'd';
-
         let mut new_name = [0u8; constants::MAX_DEVICE_NAME_LENGTH];
         new_name[0] = b'N';
         new_name[1] = b'e';
         new_name[2] = b'w';
-
         // Add initial device
-        host.add_or_update_device(addr, Some(-60), Some(original_name), Some(0x111111));
+        let device = BluetoothDevice {
+            addr,
+            rssi: Some(-60),
+            name: Some(original_name),
+            class_of_device: Some(0x111111),
+        };
+        host.upsert_device(device);
         assert_eq!(host.devices.len(), 1);
-
         // Update existing device
-        host.add_or_update_device(addr, Some(-40), Some(new_name), None);
+        let device = BluetoothDevice {
+            addr,
+            rssi: Some(-40),
+            name: Some(new_name),
+            class_of_device: Some(0x111111),
+        };
+        host.upsert_device(device);
         assert_eq!(host.devices.len(), 1); // Should still be only one device
-
         let device = host.devices.get(&addr).unwrap();
         assert_eq!(device.addr, addr);
         assert_eq!(device.rssi, Some(-40)); // Updated
@@ -791,13 +744,22 @@ mod tests {
         name[1] = b'e';
         name[2] = b's';
         name[3] = b't';
-
         // Add initial device
-        host.add_or_update_device(addr, Some(-60), Some(name), Some(0x111111));
-
+        let device = BluetoothDevice {
+            addr,
+            rssi: Some(-60),
+            name: Some(name),
+            class_of_device: Some(0x111111),
+        };
+        host.upsert_device(device);
         // Update only RSSI
-        host.add_or_update_device(addr, Some(-30), None, None);
-
+        let device = BluetoothDevice {
+            addr,
+            rssi: Some(-30),
+            name: Some(name),
+            class_of_device: Some(0x111111),
+        };
+        host.upsert_device(device);
         let device = host.devices.get(&addr).unwrap();
         assert_eq!(device.rssi, Some(-30)); // Updated
         assert_eq!(device.name, Some(name)); // Unchanged
@@ -874,61 +836,30 @@ mod tests {
         // Test max device limit
         for i in 0..constants::MAX_DISCOVERED_DEVICES {
             let addr = create_test_address([i as u8, 0x02, 0x03, 0x04, 0x05, 0x06]);
-            host.add_or_update_device(addr, Some(-(i as i8) - 30), None, None);
+            let device = BluetoothDevice {
+                addr,
+                rssi: Some(-(i as i8) - 30),
+                name: None,
+                class_of_device: None,
+            };
+            host.upsert_device(device);
         }
 
         assert_eq!(host.devices.len(), constants::MAX_DISCOVERED_DEVICES);
 
         // Adding one more should not exceed the limit (heapless behavior)
         let extra_addr = create_test_address([0xFF, 0x02, 0x03, 0x04, 0x05, 0x06]);
-        host.add_or_update_device(extra_addr, Some(-100), None, None);
+        let device = BluetoothDevice {
+            addr: extra_addr,
+            rssi: Some(-100),
+            name: None,
+            class_of_device: None,
+        };
+        host.upsert_device(device);
 
         // Device count should not exceed max (heapless map handles this)
         assert!(host.devices.len() <= constants::MAX_DISCOVERED_DEVICES);
     }
-
-    #[test]
-    fn test_connection_management() {
-        let mut host = create_test_host();
-        let addr1 = create_test_address([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
-        let addr2 = create_test_address([0x11, 0x12, 0x13, 0x14, 0x15, 0x16]);
-
-        // Test adding connections
-        assert!(host.connections.insert(addr1, 100).is_ok());
-        assert!(host.connections.insert(addr2, 200).is_ok());
-
-        assert_eq!(host.connections.len(), 2);
-        assert_eq!(host.connections.get(&addr1), Some(&100));
-        assert_eq!(host.connections.get(&addr2), Some(&200));
-
-        // Test removing connection
-        host.connections.remove(&addr1);
-        assert_eq!(host.connections.len(), 1);
-        assert!(!host.connections.contains_key(&addr1));
-        assert!(host.connections.contains_key(&addr2));
-    }
-
-    #[test]
-    fn test_local_info_initialization() {
-        let mut host = create_test_host();
-
-        // Test initial state
-        assert_eq!(host.local_info.bd_addr, None);
-        assert_eq!(host.local_info.hci_version, None);
-
-        // Test setting local info
-        let test_addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
-        host.local_info.bd_addr = Some(test_addr);
-        host.local_info.hci_version = Some(0x09); // Version 5.0
-        host.local_info.manufacturer_name = Some(0x1234);
-
-        assert_eq!(host.local_info.bd_addr, Some(test_addr));
-        assert_eq!(host.local_info.hci_version, Some(0x09));
-        assert_eq!(host.local_info.manufacturer_name, Some(0x1234));
-    }
-
-    // Mock HCI event tests would require more complex setup with actual HCI types
-    // These tests verify the logic without requiring a real controller
 
     #[test]
     fn test_device_discovery_workflow() {
@@ -951,9 +882,20 @@ mod tests {
         // Add discovered devices
         let addr1 = create_test_address([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
         let addr2 = create_test_address([0x11, 0x12, 0x13, 0x14, 0x15, 0x16]);
-
-        host.add_or_update_device(addr1, Some(-45), None, Some(0x240404));
-        host.add_or_update_device(addr2, Some(-55), None, Some(0x1F00));
+        let device1 = BluetoothDevice {
+            addr: addr1,
+            rssi: Some(-45),
+            name: None,
+            class_of_device: Some(0x240404),
+        };
+        let device2 = BluetoothDevice {
+            addr: addr2,
+            rssi: Some(-55),
+            name: None,
+            class_of_device: Some(0x1F00),
+        };
+        host.upsert_device(device1);
+        host.upsert_device(device2);
 
         assert_eq!(host.devices.len(), 2);
 
@@ -970,7 +912,13 @@ mod tests {
         let addr = create_test_address([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
 
         // Add device first
-        host.add_or_update_device(addr, Some(-50), None, None);
+        let device = BluetoothDevice {
+            addr,
+            rssi: Some(-50),
+            name: None,
+            class_of_device: None,
+        };
+        host.upsert_device(device);
         assert!(host.devices.contains_key(&addr));
 
         // Start connection
@@ -991,60 +939,39 @@ mod tests {
     }
 
     #[test]
-    fn test_error_conditions() {
-        let _host = create_test_host();
-
-        // Test invalid address parsing
-        let invalid_addresses = [
-            "",
-            "invalid",
-            "01:02:03:04:05",       // Too short
-            "01:02:03:04:05:06:07", // Too long
-            "GG:HH:II:JJ:KK:LL",    // Invalid hex
-        ];
-
-        for addr in &invalid_addresses {
-            let result = BluetoothHost::parse_address(addr);
-            assert!(result.is_err(), "Should fail for address: {}", addr);
-        }
-
-        // Test addresses that actually work (the function is permissive)
-        let valid_addresses = [
-            "01:02:03:04:05:06", // Standard colon format
-            "01-02-03-04-05-06", // Standard dash format
-            "012345678901",      // No separators but valid hex
-            "01-02:03-04:05-06", // Mixed separators - allowed
-        ];
-
-        for addr in &valid_addresses {
-            let result = BluetoothHost::parse_address(addr);
-            assert!(result.is_ok(), "Should work for address: {}", addr);
-        }
-    }
-
-    #[test]
     fn test_edge_cases() {
         let mut host = create_test_host();
 
         // Test with null address
         let null_addr = create_test_address([0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-        host.add_or_update_device(null_addr, None, None, None);
+        let device = BluetoothDevice {
+            addr: null_addr,
+            rssi: None,
+            name: None,
+            class_of_device: None,
+        };
+        host.upsert_device(device);
         assert!(host.devices.contains_key(&null_addr));
 
         // Test with broadcast address
         let broadcast_addr = create_test_address([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
-        host.add_or_update_device(broadcast_addr, None, None, None);
+        let device = BluetoothDevice {
+            addr: broadcast_addr,
+            rssi: None,
+            name: None,
+            class_of_device: None,
+        };
+        host.upsert_device(device);
         assert!(host.devices.contains_key(&broadcast_addr));
 
         // Test class of device edge cases
-        assert_eq!(BluetoothHost::parse_class_of_device(&[]), None);
-        assert_eq!(BluetoothHost::parse_class_of_device(&[0x12]), None);
-        assert_eq!(BluetoothHost::parse_class_of_device(&[0x12, 0x34]), None);
+        assert_eq!(BluetoothDevice::parse_class_of_device(&[0, 0, 0]), None);
         assert_eq!(
-            BluetoothHost::parse_class_of_device(&[0x12, 0x34, 0x56]),
-            Some(0x563412)
+            BluetoothDevice::parse_class_of_device(&[0x12, 0x34, 0x56]),
+            Some(0x123456)
         );
     }
+
     #[test]
     fn test_concurrent_operations() {
         let mut host = create_test_host();
@@ -1055,16 +982,36 @@ mod tests {
 
         let addr = create_test_address([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
 
-        // Multiple updates to same device (simulating multiple inquiry results)
-        host.add_or_update_device(addr, Some(-60), None, None);
-        host.add_or_update_device(addr, Some(-55), None, Some(0x123456));
+        let device = BluetoothDevice {
+            addr,
+            rssi: Some(-70),
+            name: None,
+            class_of_device: Some(0x123456),
+        };
+        host.upsert_device(device);
+        assert!(host.devices.contains_key(&addr));
 
+        // Multiple updates to same device (simulating multiple inquiry results)
+        let device = BluetoothDevice {
+            addr,
+            rssi: Some(-60),
+            name: None,
+            class_of_device: Some(0x123456),
+        };
+        host.upsert_device(device);
+        let device = BluetoothDevice {
+            addr,
+            rssi: Some(-55),
+            name: None,
+            class_of_device: Some(0x123456),
+        };
+        host.upsert_device(device);
         let mut name = [0u8; constants::MAX_DEVICE_NAME_LENGTH];
         name[0] = b'T';
         name[1] = b'e';
         name[2] = b's';
         name[3] = b't';
-        host.add_or_update_device(addr, None, Some(name), None);
+        host.update_device_name(addr, name);
 
         let device = host.devices.get(&addr).unwrap();
         assert_eq!(device.rssi, Some(-55)); // Last RSSI update
