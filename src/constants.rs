@@ -16,20 +16,8 @@ pub const DEFAULT_INQUIRY_DURATION: u8 = 0x30;
 /// Unlimited number of inquiry responses
 pub const UNLIMITED_RESPONSES: u8 = 0;
 
-/// Standard packet types for ACL connections (DM1, DM3, DM5, DH1, DH3, DH5)
-pub const DEFAULT_PACKET_TYPES: u16 = 0xCC18;
-
-/// Page scan repetition mode R1
-pub const PAGE_SCAN_REPETITION_MODE_R1: u8 = 0x01;
-
 /// Reserved field value
 pub const RESERVED_FIELD: u8 = 0x00;
-
-/// No clock offset specified
-pub const NO_CLOCK_OFFSET: u16 = 0x0000;
-
-/// Allow role switch during connection
-pub const ALLOW_ROLE_SWITCH: u8 = 0x01;
 
 /// Maximum number of connection cleanup entries
 pub const MAX_CLEANUP_ENTRIES: usize = 8;
@@ -74,25 +62,6 @@ mod tests {
         assert_eq!(DEFAULT_INQUIRY_DURATION, 0x30);
         assert!(DEFAULT_INQUIRY_DURATION > 0);
         assert_eq!(UNLIMITED_RESPONSES, 0);
-    }
-
-    #[test]
-    fn test_packet_types_constant() {
-        assert_eq!(DEFAULT_PACKET_TYPES, 0xCC18);
-        // Verify it's a valid packet type value
-        assert!(DEFAULT_PACKET_TYPES > 0);
-    }
-
-    #[test]
-    fn test_page_scan_constants() {
-        assert_eq!(PAGE_SCAN_REPETITION_MODE_R1, 0x01);
-        assert_eq!(RESERVED_FIELD, 0x00);
-        assert_eq!(NO_CLOCK_OFFSET, 0x0000);
-    }
-
-    #[test]
-    fn test_role_switch_constant() {
-        assert_eq!(ALLOW_ROLE_SWITCH, 0x01);
     }
 
     #[test]

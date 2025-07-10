@@ -13,6 +13,7 @@ pub mod constants;
 pub mod host;
 pub mod processor;
 
+use bt_hci::event::{ExtendedInquiryResult, InquiryResultItem};
 use constants::{MAX_CHANNELS, MAX_DISCOVERED_DEVICES};
 use embassy_sync::channel::Channel;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
@@ -169,6 +170,49 @@ impl BluetoothDevice {
         self.class_of_device = Some(class_of_device);
         self
     }
+
+    /// Parse the Class of Device (`CoD`) from a 3-byte array
+    #[must_use]
+    pub fn parse_class_of_device(class_of_device: &[u8; 3]) -> Option<u32> {
+        if class_of_device.iter().all(|&x| x == 0) {
+            None
+        } else {
+            Some(u32::from_le_bytes([
+                class_of_device[2],
+                class_of_device[1],
+                class_of_device[0],
+                0,
+            ]))
+        }
+    }
+}
+
+impl TryFrom<InquiryResultItem> for BluetoothDevice {
+    type Error = BluetoothError;
+
+    fn try_from(item: InquiryResultItem) -> Result<Self, Self::Error> {
+        Ok(Self {
+            addr: item.bd_addr.try_into()?,
+            rssi: item.rssi,
+            name: None,
+            class_of_device: item
+                .class_of_device
+                .and_then(|x| BluetoothDevice::parse_class_of_device(&x)),
+        })
+    }
+}
+
+impl TryFrom<&ExtendedInquiryResult<'_>> for BluetoothDevice {
+    type Error = BluetoothError;
+
+    fn try_from(item: &ExtendedInquiryResult<'_>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            addr: item.bd_addr.try_into()?,
+            rssi: None,
+            name: None,
+            class_of_device: BluetoothDevice::parse_class_of_device(&item.class_of_device),
+        })
+    }
 }
 
 /// Local device information collected during initialization
@@ -282,7 +326,8 @@ impl Default for BluetoothHost {
 }
 
 impl BluetoothHost {
-    /// Create a new BluetoothHost with default values
+    /// Create a new `BluetoothHost` with default values
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
