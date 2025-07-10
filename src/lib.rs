@@ -61,7 +61,9 @@ use embassy_sync::{
 };
 use heapless::{FnvIndexMap, String, Vec};
 
-pub use api::{connect_device, disconnect_device, get_devices, get_state, start_discovery};
+pub use api::{
+    connect_device, disconnect_device, get_devices, get_paired_devices, get_state, start_discovery,
+};
 pub use class_of_device::{
     ClassOfDevice, DeviceDescription, MajorDeviceClass, MajorServiceClasses,
 };
