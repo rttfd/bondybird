@@ -226,7 +226,7 @@ impl BluetoothHost {
         controller
             .exec(&inquiry_cancel)
             .await
-            .map_err(|e| Self::convert_hci_error(e))?;
+            .map_err(Self::convert_hci_error)?;
 
         self.state = BluetoothState::PoweredOn;
         Ok(())
@@ -286,7 +286,7 @@ impl BluetoothHost {
         let disconnect = cmd::link_control::Disconnect::new(conn_handle, disconnect_reason);
 
         match controller.exec(&disconnect).await {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(e) => Err(Self::convert_hci_error(e)),
         }
     }
@@ -305,7 +305,7 @@ impl BluetoothHost {
         );
 
         match controller.exec(&remote_name_req).await {
-            Ok(_) => {
+            Ok(()) => {
                 // The response will come as a RemoteNameRequestComplete event
                 // For now, check if we already have the name in our device cache
                 if let Some(device) = self.devices.get(&addr) {
@@ -386,7 +386,7 @@ impl BluetoothHost {
         controller
             .exec(&reset_cmd)
             .await
-            .map_err(|e| Self::convert_hci_error(e))?;
+            .map_err(Self::convert_hci_error)?;
         defmt::debug!("Controller reset complete");
 
         // Step 2: Set event mask to enable the events we're interested in
@@ -428,7 +428,7 @@ impl BluetoothHost {
         let version_info = controller
             .exec(&read_local_version)
             .await
-            .map_err(|e| Self::convert_hci_error(e))?;
+            .map_err(Self::convert_hci_error)?;
         defmt::debug!(
             "Local version info: {:?}",
             defmt::Debug2Format(&version_info)
@@ -449,7 +449,7 @@ impl BluetoothHost {
         let bd_addr = controller
             .exec(&read_bd_addr)
             .await
-            .map_err(|e| Self::convert_hci_error(e))?;
+            .map_err(Self::convert_hci_error)?;
         defmt::debug!("Local BD_ADDR: {:?}", defmt::Debug2Format(&bd_addr));
 
         self.local_info.bd_addr = bd_addr.try_into().ok();
@@ -842,7 +842,7 @@ impl BluetoothHost {
         }
     }
 
-    /// Convert HCI error to BluetoothError with detailed error information
+    /// Convert HCI error to `BluetoothError` with detailed error information
     fn convert_hci_error<E: core::fmt::Debug>(error: E) -> BluetoothError {
         // Try to extract status code from the error
         // This is a simplified approach - in a real implementation you'd pattern match
@@ -854,7 +854,7 @@ impl BluetoothHost {
         BluetoothError::HciTransportError
     }
 
-    /// Convert HCI command result with status to BluetoothError
+    /// Convert HCI command result with status to `BluetoothError`
     fn convert_hci_command_error(status: u8) -> BluetoothError {
         defmt::error!("HCI Command failed with status: 0x{:02X}", status);
         BluetoothError::HciCommandFailed(status)
