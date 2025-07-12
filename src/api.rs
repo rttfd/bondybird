@@ -45,7 +45,7 @@ pub async fn start_discovery() -> Result<(), BluetoothError> {
     match RESPONSE_CHANNEL.receiver().receive().await {
         Response::DiscoverStarted => Ok(()),
         Response::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
+        _ => Err(BluetoothError::InvalidState),
     }
 }
 
@@ -59,7 +59,7 @@ pub async fn get_devices() -> Result<Vec<BluetoothDevice, MAX_DISCOVERED_DEVICES
     match RESPONSE_CHANNEL.receiver().receive().await {
         Response::Devices(devices) => Ok(devices),
         Response::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
+        _ => Err(BluetoothError::InvalidState),
     }
 }
 
@@ -73,7 +73,7 @@ pub async fn connect_device(address: String<64>) -> Result<(), BluetoothError> {
     match RESPONSE_CHANNEL.receiver().receive().await {
         Response::PairComplete => Ok(()),
         Response::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
+        _ => Err(BluetoothError::InvalidState),
     }
 }
 
@@ -90,7 +90,7 @@ pub async fn disconnect_device(address: String<64>) -> Result<(), BluetoothError
     match RESPONSE_CHANNEL.receiver().receive().await {
         Response::DisconnectComplete => Ok(()),
         Response::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
+        _ => Err(BluetoothError::InvalidState),
     }
 }
 
@@ -104,7 +104,7 @@ pub async fn get_state() -> Result<BluetoothState, BluetoothError> {
     match RESPONSE_CHANNEL.receiver().receive().await {
         Response::State(state) => Ok(state),
         Response::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
+        _ => Err(BluetoothError::InvalidState),
     }
 }
 
@@ -118,7 +118,7 @@ pub async fn get_local_info() -> Result<LocalDeviceInfo, BluetoothError> {
     match RESPONSE_CHANNEL.receiver().receive().await {
         Response::LocalInfo(info) => Ok(info),
         Response::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
+        _ => Err(BluetoothError::InvalidState),
     }
 }
 
@@ -136,7 +136,7 @@ pub async fn get_paired_devices()
     match RESPONSE_CHANNEL.receiver().receive().await {
         Response::PairedDevices(devices) => Ok(devices),
         Response::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
+        _ => Err(BluetoothError::InvalidState),
     }
 }
 
@@ -186,7 +186,7 @@ pub async fn get_device_name(
     match RESPONSE_CHANNEL.receiver().receive().await {
         Response::DeviceName(addr, name) => Ok((addr, name)),
         Response::Error(e) => Err(e),
-        _ => Err(BluetoothError::HciError),
+        _ => Err(BluetoothError::InvalidState),
     }
 }
 

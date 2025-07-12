@@ -56,8 +56,8 @@
 //!    ```
 
 use crate::{
-    BluetoothAddress, BluetoothDevice, BluetoothError, BluetoothHost, BluetoothState, Request,
-    Response, constants,
+    BluetoothAddress, BluetoothDevice, BluetoothError, BluetoothHost, BluetoothState,
+    INTERNAL_COMMAND_CHANNEL, InternalCommand, Request, Response, constants,
 };
 use bt_hci::param::{AllowRoleSwitch, ClockOffset, PacketType, PageScanRepetitionMode};
 use bt_hci::{
@@ -116,7 +116,7 @@ impl BluetoothHost {
     }
 
     /// Process an API request
-    pub async fn process_api_request<T: Transport + 'static, const SLOTS: usize>(
+    pub(crate) async fn process_api_request<T: Transport + 'static, const SLOTS: usize>(
         &mut self,
         request: Request,
         controller: &ExternalController<T, SLOTS>,
@@ -226,7 +226,7 @@ impl BluetoothHost {
         controller
             .exec(&inquiry_cancel)
             .await
-            .map_err(|_| BluetoothError::HciError)?;
+            .map_err(|e| Self::convert_hci_error(e))?;
 
         self.state = BluetoothState::PoweredOn;
         Ok(())
@@ -258,11 +258,16 @@ impl BluetoothHost {
             AllowRoleSwitch::Allowed,
         );
 
-        if controller.exec(&create_conn).await.is_ok() {
+        if let Err(e) = controller.exec(&create_conn).await {
+            defmt::warn!(
+                "Failed to create connection for address {}: {:?}",
+                addr,
+                defmt::Debug2Format(&e)
+            );
+            Err(BluetoothError::ConnectionFailed)
+        } else {
             self.state = BluetoothState::Connecting;
             Ok(())
-        } else {
-            Err(BluetoothError::ConnectionFailed)
         }
     }
 
@@ -280,10 +285,9 @@ impl BluetoothHost {
 
         let disconnect = cmd::link_control::Disconnect::new(conn_handle, disconnect_reason);
 
-        if controller.exec(&disconnect).await.is_ok() {
-            Ok(())
-        } else {
-            Err(BluetoothError::HciError)
+        match controller.exec(&disconnect).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(Self::convert_hci_error(e)),
         }
     }
 
@@ -300,20 +304,21 @@ impl BluetoothHost {
             bt_hci::param::ClockOffset::new(),
         );
 
-        if controller.exec(&remote_name_req).await.is_ok() {
-            // The response will come as a RemoteNameRequestComplete event
-            // For now, check if we already have the name in our device cache
-            if let Some(device) = self.devices.get(&addr) {
-                if let Some(ref name) = device.name {
-                    return Ok(name.clone());
+        match controller.exec(&remote_name_req).await {
+            Ok(_) => {
+                // The response will come as a RemoteNameRequestComplete event
+                // For now, check if we already have the name in our device cache
+                if let Some(device) = self.devices.get(&addr) {
+                    if let Some(ref name) = device.name {
+                        return Ok(name.clone());
+                    }
                 }
-            }
 
-            // If not found in cache, return a placeholder error
-            // In a real implementation, we would wait for the RemoteNameRequestComplete event
-            Err(BluetoothError::DeviceNotFound)
-        } else {
-            Err(BluetoothError::HciError)
+                // If not found in cache, return a placeholder error
+                // In a real implementation, we would wait for the RemoteNameRequestComplete event
+                Err(BluetoothError::DeviceNotFound)
+            }
+            Err(e) => Err(Self::convert_hci_error(e)),
         }
     }
 
@@ -381,7 +386,7 @@ impl BluetoothHost {
         controller
             .exec(&reset_cmd)
             .await
-            .map_err(|_| BluetoothError::HciError)?;
+            .map_err(|e| Self::convert_hci_error(e))?;
         defmt::debug!("Controller reset complete");
 
         // Step 2: Set event mask to enable the events we're interested in
@@ -415,7 +420,7 @@ impl BluetoothHost {
         controller
             .exec(&set_event_mask)
             .await
-            .map_err(|_| BluetoothError::HciError)?;
+            .map_err(Self::convert_hci_error)?;
         defmt::debug!("Event mask set successfully");
 
         // Step 3: Get local version information
@@ -423,7 +428,7 @@ impl BluetoothHost {
         let version_info = controller
             .exec(&read_local_version)
             .await
-            .map_err(|_| BluetoothError::HciError)?;
+            .map_err(|e| Self::convert_hci_error(e))?;
         defmt::debug!(
             "Local version info: {:?}",
             defmt::Debug2Format(&version_info)
@@ -444,7 +449,7 @@ impl BluetoothHost {
         let bd_addr = controller
             .exec(&read_bd_addr)
             .await
-            .map_err(|_| BluetoothError::HciError)?;
+            .map_err(|e| Self::convert_hci_error(e))?;
         defmt::debug!("Local BD_ADDR: {:?}", defmt::Debug2Format(&bd_addr));
 
         self.local_info.bd_addr = bd_addr.try_into().ok();
@@ -515,7 +520,8 @@ impl BluetoothHost {
     ///
     /// This method handles various HCI events and updates the internal state,
     /// device list, and connection information based on the received events.
-    pub fn process_hci_event(&mut self, event: &event::Event<'_>) {
+    /// Commands that need to be executed are sent to the API processor to avoid deadlocks.
+    pub(crate) async fn process_hci_event(&mut self, event: &event::Event<'_>) {
         match *event {
             event::Event::InquiryResult(ref result) => {
                 result.iter().for_each(|res| {
@@ -538,6 +544,14 @@ impl BluetoothHost {
                         self.connections.insert(addr, conn_handle).ok();
 
                         self.state = BluetoothState::Connected;
+
+                        // Initiate authentication/pairing after connection is established
+                        let command = InternalCommand::AuthenticationRequested { conn_handle };
+                        INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
+                        defmt::debug!(
+                            "Authentication_Requested command sent for connection handle {}",
+                            conn_handle
+                        );
                     }
                 } else {
                     self.state = BluetoothState::PoweredOn;
@@ -574,10 +588,276 @@ impl BluetoothHost {
                     }
                 });
             }
+            event::Event::PinCodeRequest(ref request) => {
+                defmt::debug!(
+                    "PIN code request received for device: {:?}",
+                    defmt::Debug2Format(&request.bd_addr)
+                );
+
+                // send a reply with 0000 as the PIN code
+                if let Ok(addr) = request.bd_addr.try_into() {
+                    // PIN code "0000" in ASCII: [b'0', b'0', b'0', b'0', 0, 0, ...]
+                    let mut pin_code = [0u8; 16];
+                    pin_code[0] = b'0';
+                    pin_code[1] = b'0';
+                    pin_code[2] = b'0';
+                    pin_code[3] = b'0';
+
+                    let command = InternalCommand::PinCodeRequestReply {
+                        bd_addr: addr,
+                        pin_code,
+                    };
+                    INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
+                    defmt::debug!("Pin Code Request Reply command sent with 0000");
+                }
+            }
+            event::Event::LinkKeyRequest(ref request) => {
+                if let Ok(addr) = request.bd_addr.try_into() {
+                    defmt::debug!(
+                        "Link key request received for device: {:?}",
+                        defmt::Debug2Format(&addr)
+                    );
+
+                    // Check if we have a stored link key for this device
+                    if let Some(link_key) = self.get_link_key(&addr) {
+                        defmt::debug!("Found stored link key, sending reply");
+                        let command = InternalCommand::LinkKeyRequestReply {
+                            bd_addr: addr,
+                            link_key: *link_key,
+                        };
+                        INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
+                        defmt::debug!("Link Key Request Reply command sent");
+                    } else {
+                        defmt::debug!("No stored link key found, sending negative reply");
+                        let command =
+                            InternalCommand::LinkKeyRequestNegativeReply { bd_addr: addr };
+                        INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
+                        defmt::debug!("Link Key Request Negative Reply command sent");
+                    }
+                } else {
+                    defmt::warn!("Failed to parse BD_ADDR from link key request");
+                }
+            }
+            event::Event::IoCapabilityRequest(ref request) => {
+                if let Ok(addr) = request.bd_addr.try_into() {
+                    defmt::debug!(
+                        "IO Capability request received for device: {:?}",
+                        defmt::Debug2Format(&addr)
+                    );
+
+                    // Respond with our IO capabilities (NoInputNoOutput for simplicity)
+                    let command = InternalCommand::IoCapabilityRequestReply { bd_addr: addr };
+                    INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
+                    defmt::debug!("IO Capability Request Reply command sent");
+                } else {
+                    defmt::warn!("Failed to parse BD_ADDR from IO capability request");
+                }
+            }
+            event::Event::UserConfirmationRequest(ref request) => {
+                if let Ok(addr) = request.bd_addr.try_into() {
+                    defmt::debug!(
+                        "User confirmation request received for device: {:?}, passkey: {}",
+                        defmt::Debug2Format(&addr),
+                        request.numeric_value
+                    );
+
+                    // Auto-accept for simplicity (in a real app, you'd prompt the user)
+                    let command = InternalCommand::UserConfirmationRequestReply { bd_addr: addr };
+                    INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
+                    defmt::debug!("User Confirmation Request Reply command sent (auto-accepted)");
+                } else {
+                    defmt::warn!("Failed to parse BD_ADDR from user confirmation request");
+                }
+            }
+            event::Event::LinkKeyNotification(ref notification) => {
+                if let Ok(addr) = notification.bd_addr.try_into() {
+                    defmt::debug!(
+                        "Link key notification received for device: {:?}",
+                        defmt::Debug2Format(&addr)
+                    );
+
+                    // Store the link key for future use
+                    if self.store_link_key(addr, notification.link_key).is_err() {
+                        defmt::warn!(
+                            "Failed to store link key for device: {:?}",
+                            defmt::Debug2Format(&addr)
+                        );
+                    } else {
+                        defmt::info!(
+                            "Link key stored successfully for device: {:?}",
+                            defmt::Debug2Format(&addr)
+                        );
+                    }
+                } else {
+                    defmt::warn!("Failed to parse BD_ADDR from link key notification");
+                }
+            }
+            event::Event::AuthenticationComplete(ref complete) => {
+                let conn_handle = complete.handle.raw();
+
+                // Find the BD_ADDR for this connection handle
+                let bd_addr = self.connections.iter().find_map(|(addr, handle)| {
+                    if *handle == conn_handle {
+                        Some(*addr)
+                    } else {
+                        None
+                    }
+                });
+
+                if let Some(addr) = bd_addr {
+                    defmt::info!(
+                        "Authentication complete for device: {:?}, status: {:?}",
+                        defmt::Debug2Format(&addr),
+                        defmt::Debug2Format(&complete.status)
+                    );
+                } else {
+                    defmt::info!(
+                        "Authentication complete for handle: {}, status: {:?}",
+                        conn_handle,
+                        defmt::Debug2Format(&complete.status)
+                    );
+                }
+
+                if complete.status.to_result().is_ok() {
+                    defmt::info!("Device successfully paired!");
+                } else {
+                    defmt::warn!("Device pairing failed");
+                }
+            }
             _ => {
                 defmt::debug!("Unhandled HCI event: {:?}", defmt::Debug2Format(event));
             }
         }
+    }
+
+    /// Process internal command (fire-and-forget, no response needed)
+    pub(crate) async fn process_internal_command<T: Transport + 'static, const SLOTS: usize>(
+        &mut self,
+        command: InternalCommand,
+        controller: &ExternalController<T, SLOTS>,
+    ) {
+        match command {
+            InternalCommand::AuthenticationRequested { conn_handle } => {
+                let auth_requested = cmd::link_control::AuthenticationRequested::new(
+                    bt_hci::param::ConnHandle::new(conn_handle),
+                );
+
+                if let Err(e) = controller.exec(&auth_requested).await {
+                    defmt::warn!(
+                        "Failed to send Authentication_Requested command for handle {}: {:?}",
+                        conn_handle,
+                        defmt::Debug2Format(&e)
+                    );
+                } else {
+                    defmt::debug!(
+                        "Authentication_Requested command sent for connection handle {}",
+                        conn_handle
+                    );
+                }
+            }
+            InternalCommand::LinkKeyRequestReply { bd_addr, link_key } => {
+                let reply = cmd::link_control::LinkKeyRequestReply::new(bd_addr.into(), link_key);
+
+                if let Err(e) = controller.exec(&reply).await {
+                    defmt::warn!(
+                        "Failed to send Link Key Request Reply for address {}: {:?}",
+                        bd_addr,
+                        defmt::Debug2Format(&e)
+                    );
+                } else {
+                    defmt::debug!("Link Key Request Reply sent");
+                }
+            }
+            InternalCommand::LinkKeyRequestNegativeReply { bd_addr } => {
+                let negative_reply =
+                    cmd::link_control::LinkKeyRequestNegativeReply::new(bd_addr.into());
+
+                if let Err(e) = controller.exec(&negative_reply).await {
+                    defmt::warn!(
+                        "Failed to send Link Key Request Negative Reply for address {}: {:?}",
+                        bd_addr,
+                        defmt::Debug2Format(&e)
+                    );
+                } else {
+                    defmt::debug!("Link Key Request Negative Reply sent");
+                }
+            }
+            InternalCommand::IoCapabilityRequestReply { bd_addr } => {
+                let io_reply = cmd::link_control::IoCapabilityRequestReply::new(
+                    bd_addr.into(),
+                    bt_hci::param::IoCapability::NoInputNoOutput,
+                    bt_hci::param::OobDataPresent::NotPresent,
+                    bt_hci::param::AuthenticationRequirements::MitmNotRequiredGeneralBonding,
+                );
+
+                if let Err(e) = controller.exec(&io_reply).await {
+                    defmt::warn!(
+                        "Failed to send IO Capability Request Reply for address {}: {:?}",
+                        bd_addr,
+                        defmt::Debug2Format(&e)
+                    );
+                } else {
+                    defmt::debug!("IO Capability Request Reply sent");
+                }
+            }
+            InternalCommand::UserConfirmationRequestReply { bd_addr } => {
+                let confirmation_reply =
+                    cmd::link_control::UserConfirmationRequestReply::new(bd_addr.into());
+
+                if let Err(e) = controller.exec(&confirmation_reply).await {
+                    defmt::warn!(
+                        "Failed to send User Confirmation Request Reply for address {}: {:?}",
+                        bd_addr,
+                        defmt::Debug2Format(&e)
+                    );
+                } else {
+                    defmt::debug!("User Confirmation Request Reply sent (auto-accepted)");
+                }
+            }
+            InternalCommand::PinCodeRequestReply { bd_addr, pin_code } => {
+                // PIN code length is typically the actual length of the PIN (4 for "0000")
+                if let Ok(pin_length) = u8::try_from(
+                    pin_code
+                        .iter()
+                        .position(|&x| x == 0)
+                        .unwrap_or(pin_code.len()),
+                ) {
+                    let pin_reply = cmd::link_control::PinCodeRequestReply::new(
+                        bd_addr.into(),
+                        pin_length,
+                        pin_code,
+                    );
+
+                    if let Err(e) = controller.exec(&pin_reply).await {
+                        defmt::warn!(
+                            "Failed to send PIN Code Request Reply for address {}: {:?}",
+                            bd_addr,
+                            defmt::Debug2Format(&e)
+                        );
+                    } else {
+                        defmt::debug!("PIN Code Request Reply sent");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Convert HCI error to BluetoothError with detailed error information
+    fn convert_hci_error<E: core::fmt::Debug>(error: E) -> BluetoothError {
+        // Try to extract status code from the error
+        // This is a simplified approach - in a real implementation you'd pattern match
+        // on specific error types from bt-hci
+        defmt::error!("HCI Error: {:?}", defmt::Debug2Format(&error));
+
+        // For now, return a generic HCI error code
+        // In the future, this could be enhanced to parse specific error codes
+        BluetoothError::HciTransportError
+    }
+
+    /// Convert HCI command result with status to BluetoothError
+    fn convert_hci_command_error(status: u8) -> BluetoothError {
+        defmt::error!("HCI Command failed with status: 0x{:02X}", status);
+        BluetoothError::HciCommandFailed(status)
     }
 }
 

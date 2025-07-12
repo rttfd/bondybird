@@ -68,13 +68,19 @@ pub use api::{
 pub use class_of_device::{
     ClassOfDevice, DeviceDescription, MajorDeviceClass, MajorServiceClasses,
 };
-pub use processor::{api_request_processor, hci_event_processor};
+pub use processor::{api_request_processor, hci_event_processor, internal_command_processor};
 
 pub(crate) static REQUEST_CHANNEL: Channel<CriticalSectionRawMutex, Request, MAX_CHANNELS> =
     Channel::new();
 
 pub(crate) static RESPONSE_CHANNEL: Channel<CriticalSectionRawMutex, Response, MAX_CHANNELS> =
     Channel::new();
+
+pub(crate) static INTERNAL_COMMAND_CHANNEL: Channel<
+    CriticalSectionRawMutex,
+    InternalCommand,
+    MAX_CHANNELS,
+> = Channel::new();
 
 /// Global `BluetoothHost`, initialized by client at runtime
 pub(crate) static BLUETOOTH_HOST: Mutex<CriticalSectionRawMutex, Option<BluetoothHost>> =
@@ -375,7 +381,7 @@ pub struct LocalDeviceInfo {
 }
 
 /// Represents the current state of the Bluetooth system
-#[derive(Debug, Clone, Copy, PartialEq, Eq, defmt::Format)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BluetoothState {
     /// Bluetooth is powered off
     PoweredOff,
@@ -394,8 +400,12 @@ pub enum BluetoothState {
 /// Bluetooth-related errors with detailed error information
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BluetoothError {
-    /// HCI controller communication error
-    HciError,
+    /// HCI controller communication error with specific error code
+    HciError(u8),
+    /// HCI command failed with status
+    HciCommandFailed(u8),
+    /// HCI transport error
+    HciTransportError,
     /// Device with specified address not found in discovered devices
     DeviceNotFound,
     /// Device is not currently connected
@@ -479,6 +489,8 @@ pub struct BluetoothHost {
     devices: FnvIndexMap<BluetoothAddress, BluetoothDevice, MAX_DISCOVERED_DEVICES>,
     /// Connection handles for connected devices (`BD_ADDR` -> `ConnHandle`)
     connections: FnvIndexMap<BluetoothAddress, u16, MAX_CHANNELS>,
+    /// Stored link keys for paired devices (`BD_ADDR` -> Link Key)
+    link_keys: FnvIndexMap<BluetoothAddress, [u8; 16], MAX_CHANNELS>,
     /// Local device information
     local_info: LocalDeviceInfo,
     /// Current discovery state
@@ -501,6 +513,7 @@ impl BluetoothHost {
             state: BluetoothState::PoweredOff,
             devices: FnvIndexMap::new(),
             connections: FnvIndexMap::new(),
+            link_keys: FnvIndexMap::new(),
             local_info: LocalDeviceInfo::default(),
             discovering: false,
             options,
@@ -512,6 +525,40 @@ impl BluetoothHost {
     pub fn options(&self) -> &BluetoothHostOptions {
         &self.options
     }
+
+    /// Store a link key for a device
+    ///
+    /// # Errors
+    /// This method returns an error if the link key cannot be stored
+    /// (e.g., if the address already exists).
+    ///
+    pub fn store_link_key(
+        &mut self,
+        addr: BluetoothAddress,
+        link_key: [u8; 16],
+    ) -> Result<(), BluetoothError> {
+        self.link_keys
+            .insert(addr, link_key)
+            .map(|_| ())
+            .map_err(|_| BluetoothError::HciError(0xFF)) // Generic storage error
+    }
+
+    /// Get a link key for a device
+    #[must_use]
+    pub fn get_link_key(&self, addr: &BluetoothAddress) -> Option<&[u8; 16]> {
+        self.link_keys.get(addr)
+    }
+
+    /// Remove a link key for a device
+    pub fn remove_link_key(&mut self, addr: &BluetoothAddress) -> Option<[u8; 16]> {
+        self.link_keys.remove(addr)
+    }
+
+    /// Check if a device has a stored link key
+    #[must_use]
+    pub fn has_link_key(&self, addr: &BluetoothAddress) -> bool {
+        self.link_keys.contains_key(addr)
+    }
 }
 
 impl Default for BluetoothHost {
@@ -522,7 +569,7 @@ impl Default for BluetoothHost {
 
 /// API requests sent to the Bluetooth processing tasks
 #[derive(Debug, Clone)]
-pub enum Request {
+pub(crate) enum Request {
     /// Start device discovery
     Discover,
     /// Stop ongoing discovery
@@ -543,9 +590,32 @@ pub enum Request {
     GetDeviceName(String<64>), // Device address as string
 }
 
+/// Internal async commands from event processor (fire-and-forget, no response needed)
+#[derive(Debug, Clone)]
+pub(crate) enum InternalCommand {
+    /// Send Authentication Requested command
+    AuthenticationRequested { conn_handle: u16 },
+    /// Send Link Key Request Reply
+    LinkKeyRequestReply {
+        bd_addr: BluetoothAddress,
+        link_key: [u8; 16],
+    },
+    /// Send Link Key Request Negative Reply
+    LinkKeyRequestNegativeReply { bd_addr: BluetoothAddress },
+    /// Send IO Capability Request Reply
+    IoCapabilityRequestReply { bd_addr: BluetoothAddress },
+    /// Send User Confirmation Request Reply
+    UserConfirmationRequestReply { bd_addr: BluetoothAddress },
+    /// Send PIN Code Request Reply
+    PinCodeRequestReply {
+        bd_addr: BluetoothAddress,
+        pin_code: [u8; 16],
+    },
+}
+
 /// API responses sent back from the Bluetooth processing tasks
 #[derive(Debug, Clone)]
-pub enum Response {
+pub(crate) enum Response {
     /// Discovery started successfully
     DiscoverStarted,
     /// Discovery completed successfully
