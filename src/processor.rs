@@ -1,4 +1,6 @@
-//! Processor Tasks - HCI Event, API Request, and Internal Command processing
+//! # Processor
+//!
+//! HCI Event, API Request, and Internal Command processing
 //!
 //! This module contains the main processing tasks that handle HCI events, API requests,
 //! and internal commands in parallel. All tasks share the `BluetoothHost` state via a
@@ -6,16 +8,21 @@
 //!
 //! # Usage
 //!
-//! These processor tasks should be spawned as separate Embassy tasks:
+//! Use the `run` function to start all processor tasks:
 //!
-//! ```rust,no_run
-//! use bondybird::processor::{hci_event_processor, api_request_processor, internal_command_processor};
+//! ```rust,ignore
+//! use bondybird::{processor, BluetoothHostOptions};
 //! use bt_hci::controller::ExternalController;
 //!
-//! // In your Embassy spawner
-//! spawner.spawn(hci_event_processor::<Transport, 4, 512>(controller)).unwrap();
-//! spawner.spawn(api_request_processor::<Transport, 4>(controller)).unwrap();
-//! spawner.spawn(internal_command_processor::<Transport, 4>(controller)).unwrap();
+//! fn example() {
+//! let options = BluetoothHostOptions::default();
+//!     let transport = YourTransport::new();
+//!     let controller = ExternalController::new(transport);
+//!     let controller_ref = Box::leak(Box::new(controller));
+//!
+//!     // This spawns all three processor tasks internally
+//!     processor::run::<YourTransport, 4, 512>(options, controller_ref).await;
+//! }
 //! ```
 //!
 //! # Architecture
@@ -32,32 +39,32 @@
 //!
 //! # Example: Complete Bluetooth Flow
 //!
-//! ```rust,no_run
+//! ```rust,no_run,ignore
 //! use bondybird::{processor, BluetoothHostOptions};
 //! use embassy_time::{Duration, Timer};
 //!
 //! async fn bluetooth_example() -> Result<(), bondybird::BluetoothError> {
-//!     // 0. Initialize BluetoothHost first
 //!     let options = BluetoothHostOptions {
 //!         lap: [0x33, 0x8B, 0x9E],       // GIAC - General Inquiry Access Code
 //!         inquiry_length: 8,              // 8 * 1.28s = ~10 seconds
 //!         num_responses: 10,              // Maximum 10 device responses
 //!     };
-//!     processor::run::<YourTransport, 4, 512>(options, controller_ref).await;
-//!     // 1. Start discovery
+//!     
+//!     // Start all processor tasks (normally done in embassy spawner)
+//!     // processor::run::<YourTransport, 4, 512>(options, controller_ref).await;
+//!     
+//!     // Use API functions (these work because processors are running)
 //!     bondybird::api::start_discovery().await?;
-//!     // 2. Wait for discovery to find devices  
 //!     Timer::after(Duration::from_secs(5)).await;
-//!     // 3. Get discovered devices
 //!     let devices = bondybird::api::get_devices().await?;
 //!     println!("Found {} devices", devices.len());
-//!     // 4. Connect to the first device if available
+//!     
 //!     if let Some(device) = devices.first() {
 //!         let addr_str = device.addr.format_hex();
 //!         bondybird::api::connect_device(&addr_str).await?;
 //!         println!("Connected to device: {}", addr_str);
 //!     }
-//!     // 5. Check Bluetooth state
+//!     
 //!     let state = bondybird::api::get_state().await?;
 //!     println!("Bluetooth state: {:?}", state);
 //!     Ok(())
@@ -92,28 +99,28 @@ async fn hci_event_processor<
     let mut read_buffer = [0u8; BUFFER_SIZE];
 
     loop {
-        defmt::debug!("[PROCESSOR] Waiting for HCI event...");
+        defmt::debug!("[HCI_EVENT] Waiting for HCI event...");
         match controller.read(&mut read_buffer).await {
             Ok(packet) => match packet {
                 ControllerToHostPacket::Event(event) => {
-                    defmt::debug!("[PROCESSOR] HCI event: {:?}", defmt::Debug2Format(&event));
+                    defmt::debug!("[HCI_EVENT] HCI event: {:?}", defmt::Debug2Format(&event));
                     let commands = process_hci_event(&event);
                     for command in commands {
                         INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
                     }
                 }
                 ControllerToHostPacket::Acl(acl) => {
-                    defmt::debug!("[PROCESSOR] HCI ACL: {:?}", defmt::Debug2Format(&acl));
+                    defmt::debug!("[HCI_EVENT] HCI ACL: {:?}", defmt::Debug2Format(&acl));
                 }
                 ControllerToHostPacket::Sync(sync) => {
-                    defmt::debug!("[PROCESSOR] HCI SYNC: {:?}", defmt::Debug2Format(&sync));
+                    defmt::debug!("[HCI_EVENT] HCI SYNC: {:?}", defmt::Debug2Format(&sync));
                 }
                 ControllerToHostPacket::Iso(iso) => {
-                    defmt::debug!("[PROCESSOR] HCI ISO: {:?}", defmt::Debug2Format(&iso));
+                    defmt::debug!("[HCI_EVENT] HCI ISO: {:?}", defmt::Debug2Format(&iso));
                 }
             },
             Err(e) => {
-                defmt::error!("[PROCESSOR] HCI read error: {:?}", defmt::Debug2Format(&e));
+                defmt::error!("[HCI_EVENT] HCI read error: {:?}", defmt::Debug2Format(&e));
             }
         }
     }
@@ -270,7 +277,7 @@ async fn api_request_processor<T: Transport + 'static, const SLOTS: usize>(
                 }
             }
             Err(e) => {
-                defmt::error!("[PROCESSOR] BluetoothHost not initialized: {}", e);
+                defmt::error!("[API] BluetoothHost not initialized: {}", e);
                 // Optionally: panic or return here if host is required
             }
         }
@@ -281,24 +288,18 @@ async fn api_request_processor<T: Transport + 'static, const SLOTS: usize>(
 
     loop {
         let api_request = api_receiver.receive().await;
-        defmt::debug!(
-            "[PROCESSOR] API request: {:?}",
-            defmt::Debug2Format(&api_request)
-        );
+        defmt::debug!("[API] API request: {:?}", defmt::Debug2Format(&api_request));
         let response = {
             match bluetooth_host().await {
                 Ok(mut host) => host.process_api_request(api_request, controller).await,
                 Err(e) => {
-                    defmt::error!("[PROCESSOR] BluetoothHost not initialized: {}", e);
+                    defmt::error!("[API] BluetoothHost not initialized: {}", e);
                     // Return an error response if host is not initialized
                     crate::Response::Error(crate::BluetoothError::InitializationFailed)
                 }
             }
         };
-        defmt::debug!(
-            "[PROCESSOR] API response: {:?}",
-            defmt::Debug2Format(&response)
-        );
+        defmt::debug!("[API] API response: {:?}", defmt::Debug2Format(&response));
         api_sender.send(response).await;
     }
 }
@@ -311,7 +312,7 @@ async fn internal_command_processor<T: Transport + 'static, const SLOTS: usize>(
     loop {
         let internal_command = internal_receiver.receive().await;
         defmt::debug!(
-            "[PROCESSOR] Internal command: {:?}",
+            "[COMMAND] Internal command: {:?}",
             defmt::Debug2Format(&internal_command)
         );
         match bluetooth_host().await {
@@ -319,7 +320,7 @@ async fn internal_command_processor<T: Transport + 'static, const SLOTS: usize>(
                 host.process_internal_command(internal_command, controller)
                     .await;
             }
-            Err(e) => defmt::error!("[PROCESSOR] BluetoothHost not initialized: {}", e),
+            Err(e) => defmt::error!("[COMMAND] BluetoothHost not initialized: {}", e),
         }
         // No response needed for internal commands
     }
