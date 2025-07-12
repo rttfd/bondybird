@@ -57,13 +57,12 @@
 
 use crate::{
     BluetoothAddress, BluetoothDevice, BluetoothError, BluetoothHost, BluetoothState,
-    INTERNAL_COMMAND_CHANNEL, InternalCommand, Request, Response, constants,
+    InternalCommand, Request, Response, constants,
 };
 use bt_hci::param::{AllowRoleSwitch, ClockOffset, PacketType, PageScanRepetitionMode};
 use bt_hci::{
     cmd,
     controller::{ControllerCmdSync, ExternalController},
-    event,
     param::EventMask,
     transport::Transport,
 };
@@ -461,7 +460,7 @@ impl BluetoothHost {
         Ok(())
     }
 
-    fn copy_device_name(source: &[u8]) -> [u8; constants::MAX_DEVICE_NAME_LENGTH] {
+    pub(crate) fn copy_device_name(source: &[u8]) -> [u8; constants::MAX_DEVICE_NAME_LENGTH] {
         let mut name = [0u8; constants::MAX_DEVICE_NAME_LENGTH];
         let name_len = core::cmp::min(source.len(), constants::MAX_DEVICE_NAME_LENGTH);
         name[..name_len].copy_from_slice(&source[..name_len]);
@@ -512,220 +511,6 @@ impl BluetoothHost {
                     class_of_device: None,
                 };
                 self.devices.insert(addr, new_device).ok();
-            }
-        }
-    }
-
-    /// Process HCI events and update the Bluetooth state accordingly
-    ///
-    /// This method handles various HCI events and updates the internal state,
-    /// device list, and connection information based on the received events.
-    /// Commands that need to be executed are sent to the API processor to avoid deadlocks.
-    pub(crate) async fn process_hci_event(&mut self, event: &event::Event<'_>) {
-        match *event {
-            event::Event::InquiryResult(ref result) => {
-                result.iter().for_each(|res| {
-                    if let Ok(device) = res.try_into() {
-                        self.upsert_device(device);
-                    }
-                });
-            }
-            event::Event::InquiryComplete(ref complete) => {
-                self.discovering = false;
-                if complete.status.to_result().is_ok() {
-                    self.state = BluetoothState::PoweredOn;
-                }
-            }
-            event::Event::ConnectionComplete(ref complete) => {
-                if complete.status.to_result().is_ok() {
-                    if let Ok(addr) = complete.bd_addr.try_into() {
-                        // Store the connection handle for this device
-                        let conn_handle = complete.handle.raw();
-                        self.connections.insert(addr, conn_handle).ok();
-
-                        self.state = BluetoothState::Connected;
-
-                        // Initiate authentication/pairing after connection is established
-                        let command = InternalCommand::AuthenticationRequested { conn_handle };
-                        INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
-                        defmt::debug!(
-                            "Authentication_Requested command sent for connection handle {}",
-                            conn_handle
-                        );
-                    }
-                } else {
-                    self.state = BluetoothState::PoweredOn;
-                }
-            }
-            event::Event::DisconnectionComplete(ref complete) => {
-                if complete.status.to_result().is_ok() {
-                    let conn_handle = complete.handle.raw();
-
-                    // Remove the connection from our map
-                    self.remove_connections_by_handle(conn_handle);
-
-                    self.state = BluetoothState::PoweredOn;
-                }
-            }
-            event::Event::RemoteNameRequestComplete(ref complete) => {
-                // Update device name if found
-                if complete.status.to_result().is_ok() {
-                    if let Ok(addr) = complete.bd_addr.try_into() {
-                        let name = Self::copy_device_name(&complete.remote_name);
-                        self.update_device_name(addr, name);
-                    }
-                }
-            }
-            event::Event::ExtendedInquiryResult(ref result) => {
-                if let Ok(device) = result.try_into() {
-                    self.upsert_device(device);
-                }
-            }
-            event::Event::InquiryResultWithRssi(ref result) => {
-                result.iter().for_each(|res| {
-                    if let Ok(device) = res.try_into() {
-                        self.upsert_device(device);
-                    }
-                });
-            }
-            event::Event::PinCodeRequest(ref request) => {
-                defmt::debug!(
-                    "PIN code request received for device: {:?}",
-                    defmt::Debug2Format(&request.bd_addr)
-                );
-
-                // send a reply with 0000 as the PIN code
-                if let Ok(addr) = request.bd_addr.try_into() {
-                    // PIN code "0000" in ASCII: [b'0', b'0', b'0', b'0', 0, 0, ...]
-                    let mut pin_code = [0u8; 16];
-                    pin_code[0] = b'0';
-                    pin_code[1] = b'0';
-                    pin_code[2] = b'0';
-                    pin_code[3] = b'0';
-
-                    let command = InternalCommand::PinCodeRequestReply {
-                        bd_addr: addr,
-                        pin_code,
-                    };
-                    INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
-                    defmt::debug!("Pin Code Request Reply command sent with 0000");
-                }
-            }
-            event::Event::LinkKeyRequest(ref request) => {
-                if let Ok(addr) = request.bd_addr.try_into() {
-                    defmt::debug!(
-                        "Link key request received for device: {:?}",
-                        defmt::Debug2Format(&addr)
-                    );
-
-                    // Check if we have a stored link key for this device
-                    if let Some(link_key) = self.get_link_key(&addr) {
-                        defmt::debug!("Found stored link key, sending reply");
-                        let command = InternalCommand::LinkKeyRequestReply {
-                            bd_addr: addr,
-                            link_key: *link_key,
-                        };
-                        INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
-                        defmt::debug!("Link Key Request Reply command sent");
-                    } else {
-                        defmt::debug!("No stored link key found, sending negative reply");
-                        let command =
-                            InternalCommand::LinkKeyRequestNegativeReply { bd_addr: addr };
-                        INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
-                        defmt::debug!("Link Key Request Negative Reply command sent");
-                    }
-                } else {
-                    defmt::warn!("Failed to parse BD_ADDR from link key request");
-                }
-            }
-            event::Event::IoCapabilityRequest(ref request) => {
-                if let Ok(addr) = request.bd_addr.try_into() {
-                    defmt::debug!(
-                        "IO Capability request received for device: {:?}",
-                        defmt::Debug2Format(&addr)
-                    );
-
-                    // Respond with our IO capabilities (NoInputNoOutput for simplicity)
-                    let command = InternalCommand::IoCapabilityRequestReply { bd_addr: addr };
-                    INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
-                    defmt::debug!("IO Capability Request Reply command sent");
-                } else {
-                    defmt::warn!("Failed to parse BD_ADDR from IO capability request");
-                }
-            }
-            event::Event::UserConfirmationRequest(ref request) => {
-                if let Ok(addr) = request.bd_addr.try_into() {
-                    defmt::debug!(
-                        "User confirmation request received for device: {:?}, passkey: {}",
-                        defmt::Debug2Format(&addr),
-                        request.numeric_value
-                    );
-
-                    // Auto-accept for simplicity (in a real app, you'd prompt the user)
-                    let command = InternalCommand::UserConfirmationRequestReply { bd_addr: addr };
-                    INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
-                    defmt::debug!("User Confirmation Request Reply command sent (auto-accepted)");
-                } else {
-                    defmt::warn!("Failed to parse BD_ADDR from user confirmation request");
-                }
-            }
-            event::Event::LinkKeyNotification(ref notification) => {
-                if let Ok(addr) = notification.bd_addr.try_into() {
-                    defmt::debug!(
-                        "Link key notification received for device: {:?}",
-                        defmt::Debug2Format(&addr)
-                    );
-
-                    // Store the link key for future use
-                    if self.store_link_key(addr, notification.link_key).is_err() {
-                        defmt::warn!(
-                            "Failed to store link key for device: {:?}",
-                            defmt::Debug2Format(&addr)
-                        );
-                    } else {
-                        defmt::info!(
-                            "Link key stored successfully for device: {:?}",
-                            defmt::Debug2Format(&addr)
-                        );
-                    }
-                } else {
-                    defmt::warn!("Failed to parse BD_ADDR from link key notification");
-                }
-            }
-            event::Event::AuthenticationComplete(ref complete) => {
-                let conn_handle = complete.handle.raw();
-
-                // Find the BD_ADDR for this connection handle
-                let bd_addr = self.connections.iter().find_map(|(addr, handle)| {
-                    if *handle == conn_handle {
-                        Some(*addr)
-                    } else {
-                        None
-                    }
-                });
-
-                if let Some(addr) = bd_addr {
-                    defmt::info!(
-                        "Authentication complete for device: {:?}, status: {:?}",
-                        defmt::Debug2Format(&addr),
-                        defmt::Debug2Format(&complete.status)
-                    );
-                } else {
-                    defmt::info!(
-                        "Authentication complete for handle: {}, status: {:?}",
-                        conn_handle,
-                        defmt::Debug2Format(&complete.status)
-                    );
-                }
-
-                if complete.status.to_result().is_ok() {
-                    defmt::info!("Device successfully paired!");
-                } else {
-                    defmt::warn!("Device pairing failed");
-                }
-            }
-            _ => {
-                defmt::debug!("Unhandled HCI event: {:?}", defmt::Debug2Format(event));
             }
         }
     }
@@ -838,6 +623,27 @@ impl BluetoothHost {
                         defmt::debug!("PIN Code Request Reply sent");
                     }
                 }
+            }
+            InternalCommand::UpsertDevice(device) => {
+                self.upsert_device(device);
+            }
+            InternalCommand::SetDiscovering(is_discovering) => {
+                self.discovering = is_discovering;
+            }
+            InternalCommand::SetState(state) => {
+                self.state = state;
+            }
+            InternalCommand::AddConnection(addr, conn_handle) => {
+                self.connections.insert(addr, conn_handle).ok();
+            }
+            InternalCommand::RemoveConnection(conn_handle) => {
+                self.remove_connections_by_handle(conn_handle);
+            }
+            InternalCommand::UpdateDeviceName(addr, name_bytes) => {
+                self.update_device_name(addr, name_bytes);
+            }
+            InternalCommand::StoreLinkKey(addr, link_key) => {
+                self.store_link_key(addr, link_key).ok();
             }
         }
     }

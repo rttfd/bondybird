@@ -1,12 +1,7 @@
 #![no_std]
 #![doc = include_str!("../README.md")]
 #![warn(missing_docs)]
-#![allow(
-    dead_code,
-    clippy::unused_async,
-    clippy::large_enum_variant,
-    clippy::too_many_lines
-)]
+#![allow(dead_code, clippy::unused_async, clippy::too_many_lines)]
 
 //! # BondyBird - BR/EDR Bluetooth Host for Embedded Systems
 //!
@@ -594,23 +589,42 @@ pub(crate) enum Request {
 #[derive(Debug, Clone)]
 pub(crate) enum InternalCommand {
     /// Send Authentication Requested command
-    AuthenticationRequested { conn_handle: u16 },
+    AuthenticationRequested {
+        conn_handle: u16,
+    },
     /// Send Link Key Request Reply
     LinkKeyRequestReply {
         bd_addr: BluetoothAddress,
         link_key: [u8; 16],
     },
     /// Send Link Key Request Negative Reply
-    LinkKeyRequestNegativeReply { bd_addr: BluetoothAddress },
+    LinkKeyRequestNegativeReply {
+        bd_addr: BluetoothAddress,
+    },
     /// Send IO Capability Request Reply
-    IoCapabilityRequestReply { bd_addr: BluetoothAddress },
+    IoCapabilityRequestReply {
+        bd_addr: BluetoothAddress,
+    },
     /// Send User Confirmation Request Reply
-    UserConfirmationRequestReply { bd_addr: BluetoothAddress },
+    UserConfirmationRequestReply {
+        bd_addr: BluetoothAddress,
+    },
     /// Send PIN Code Request Reply
     PinCodeRequestReply {
         bd_addr: BluetoothAddress,
         pin_code: [u8; 16],
     },
+    /// Host state mutations (added for event.rs decoupling)
+    UpsertDevice(BluetoothDevice),
+    SetDiscovering(bool),
+    SetState(BluetoothState),
+    AddConnection(BluetoothAddress, u16),
+    RemoveConnection(u16),
+    UpdateDeviceName(
+        BluetoothAddress,
+        [u8; crate::constants::MAX_DEVICE_NAME_LENGTH],
+    ),
+    StoreLinkKey(BluetoothAddress, [u8; 16]),
 }
 
 /// API responses sent back from the Bluetooth processing tasks
