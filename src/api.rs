@@ -226,12 +226,12 @@ mod tests {
             Request::Discover,
             Request::StopDiscovery,
             Request::GetDevices,
-            Request::Pair(addr.clone()),
-            Request::Disconnect(addr.clone()),
+            Request::Pair(addr),
+            Request::Disconnect(addr),
             Request::GetState,
             Request::GetLocalInfo,
             Request::GetPairedDevices,
-            Request::GetDeviceName(addr.clone()),
+            Request::GetDeviceName(addr),
         ];
 
         // Just ensure they can be created and cloned
@@ -262,7 +262,7 @@ mod tests {
             Response::DisconnectComplete,
             Response::State(BluetoothState::PoweredOn),
             Response::LocalInfo(create_test_local_info()),
-            Response::DeviceName(addr.clone(), test_name),
+            Response::DeviceName(addr, test_name),
             Response::Error(BluetoothError::DeviceNotFound),
         ];
 
@@ -279,7 +279,7 @@ mod tests {
 
         // Verify that the Request enum includes GetDeviceName
         let address = BluetoothAddress::try_from("12:34:56:78:9A:BC").unwrap();
-        let request = Request::GetDeviceName(address.clone());
+        let request = Request::GetDeviceName(address);
         match request {
             Request::GetDeviceName(addr) => {
                 assert_eq!(addr.format_hex().as_str(), "12:34:56:78:9A:BC");
@@ -289,7 +289,7 @@ mod tests {
 
         // Verify that Response enum includes DeviceName
         let test_name = heapless::String::<32>::try_from("Test").unwrap();
-        let response = Response::DeviceName(address.clone(), test_name.clone());
+        let response = Response::DeviceName(address, test_name.clone());
         match response {
             Response::DeviceName(addr, name) => {
                 assert_eq!(addr.format_hex().as_str(), "12:34:56:78:9A:BC");

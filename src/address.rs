@@ -1,7 +1,7 @@
 use crate::BluetoothError;
 
 /// A Bluetooth Device Address (`BD_ADDR`) wrapper for type safety
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, defmt::Format)]
 pub struct BluetoothAddress(pub [u8; 6]);
 
 impl BluetoothAddress {

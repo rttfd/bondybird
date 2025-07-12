@@ -8,8 +8,9 @@
 //!
 //! These processor tasks should be spawned as separate Embassy tasks:
 //!
-//! ```ignore
+//! ```rust,no_run
 //! use bondybird::processor::{hci_event_processor, api_request_processor, internal_command_processor};
+//! use bt_hci::controller::ExternalController;
 //!
 //! // In your Embassy spawner
 //! spawner.spawn(hci_event_processor::<Transport, 4, 512>(controller)).unwrap();
@@ -28,10 +29,50 @@
 //! * `T: Transport` - The HCI transport layer (UART, USB, etc.)
 //! * `SLOTS` - Maximum number of controller command slots (typically 4-8)
 //! * `BUFFER_SIZE` - Size of HCI read buffer in bytes (512+ recommended)
+//!
+//! # Example: Complete Bluetooth Flow
+//!
+//! ```rust,no_run
+//! use bondybird::{processor, BluetoothHostOptions};
+//! use embassy_time::{Duration, Timer};
+//!
+//! async fn bluetooth_example() -> Result<(), bondybird::BluetoothError> {
+//!     // 0. Initialize BluetoothHost first
+//!     let options = BluetoothHostOptions {
+//!         lap: [0x33, 0x8B, 0x9E],       // GIAC - General Inquiry Access Code
+//!         inquiry_length: 8,              // 8 * 1.28s = ~10 seconds
+//!         num_responses: 10,              // Maximum 10 device responses
+//!     };
+//!     processor::run::<YourTransport, 4, 512>(options, controller_ref).await;
+//!     // 1. Start discovery
+//!     bondybird::api::start_discovery().await?;
+//!     // 2. Wait for discovery to find devices  
+//!     Timer::after(Duration::from_secs(5)).await;
+//!     // 3. Get discovered devices
+//!     let devices = bondybird::api::get_devices().await?;
+//!     println!("Found {} devices", devices.len());
+//!     // 4. Connect to the first device if available
+//!     if let Some(device) = devices.first() {
+//!         let addr_str = device.addr.format_hex();
+//!         bondybird::api::connect_device(&addr_str).await?;
+//!         println!("Connected to device: {}", addr_str);
+//!     }
+//!     // 5. Check Bluetooth state
+//!     let state = bondybird::api::get_state().await?;
+//!     println!("Bluetooth state: {:?}", state);
+//!     Ok(())
+//! }
+//! ```
+//!
+//! # Note
+//!
+//! Ensure that the HCI transport and controller are correctly set up for your hardware
+//! platform. The example above assumes a generic `YourTransport` type; replace this
+//! with the actual transport type used in your project.
 
 use crate::{
-    BluetoothHost, BluetoothState, INTERNAL_COMMAND_CHANNEL, InternalCommand, REQUEST_CHANNEL,
-    RESPONSE_CHANNEL, bluetooth_host,
+    BluetoothHost, BluetoothHostOptions, BluetoothState, INTERNAL_COMMAND_CHANNEL, InternalCommand,
+    REQUEST_CHANNEL, RESPONSE_CHANNEL, bluetooth_host,
 };
 use bt_hci::{
     ControllerToHostPacket,
@@ -41,26 +82,7 @@ use bt_hci::{
 };
 use heapless::Vec;
 
-/// HCI Event Processor Task
-///
-/// Processes incoming HCI events from the Bluetooth controller in a continuous loop.
-/// This task handles all types of HCI packets including events, ACL data, synchronous data, and ISO data.
-///
-/// # Generic Parameters
-///
-/// * `T` - Transport layer implementation for HCI communication
-/// * `SLOTS` - Maximum number of controller slots for command queuing
-/// * `BUFFER_SIZE` - Size of the read buffer for incoming HCI packets (typically 512 or larger)
-///
-/// # Arguments
-///
-/// * `controller` - Reference to the external Bluetooth controller
-///
-/// # Behavior
-///
-/// This function runs indefinitely, continuously reading HCI packets from the controller
-/// and dispatching them to the appropriate handlers in the `BluetoothHost`.
-pub async fn hci_event_processor<
+async fn hci_event_processor<
     T: Transport + 'static,
     const SLOTS: usize,
     const BUFFER_SIZE: usize,
@@ -237,27 +259,7 @@ fn process_hci_event(event: &event::Event<'_>) -> Vec<InternalCommand, 8> {
     commands
 }
 
-/// API Request Processor Task
-///
-/// Processes API requests from the application and coordinates with the Bluetooth controller.
-/// This task initializes the `BluetoothHost` on startup and then continuously processes
-/// incoming API requests, sending responses back through the response channel.
-///
-/// # Generic Parameters
-///
-/// * `T` - Transport layer implementation for HCI communication
-/// * `SLOTS` - Maximum number of controller slots for command queuing
-///
-/// # Arguments
-///
-/// * `controller` - Reference to the external Bluetooth controller
-///
-/// # Behavior
-///
-/// 1. Initializes the `BluetoothHost` with the provided controller
-/// 2. Runs indefinitely, processing API requests and sending responses
-/// 3. Handles `BluetoothHost` initialization errors gracefully
-pub async fn api_request_processor<T: Transport + 'static, const SLOTS: usize>(
+async fn api_request_processor<T: Transport + 'static, const SLOTS: usize>(
     controller: &'static ExternalController<T, SLOTS>,
 ) -> ! {
     {
@@ -301,26 +303,7 @@ pub async fn api_request_processor<T: Transport + 'static, const SLOTS: usize>(
     }
 }
 
-/// Internal Command Processor Task
-///
-/// Processes internal commands from HCI event processing (fire-and-forget, no responses).
-/// This task handles internal HCI commands that are triggered by events and don't need
-/// to send responses back to any API callers.
-///
-/// # Generic Parameters
-///
-/// * `T` - Transport layer implementation for HCI communication
-/// * `SLOTS` - Maximum number of controller slots for command queuing
-///
-/// # Arguments
-///
-/// * `controller` - Reference to the external Bluetooth controller
-///
-/// # Behavior
-///
-/// Runs indefinitely, processing internal commands as they arrive from the event processor.
-/// These commands execute HCI operations without sending responses.
-pub async fn internal_command_processor<T: Transport + 'static, const SLOTS: usize>(
+async fn internal_command_processor<T: Transport + 'static, const SLOTS: usize>(
     controller: &'static ExternalController<T, SLOTS>,
 ) -> ! {
     let internal_receiver = INTERNAL_COMMAND_CHANNEL.receiver();
@@ -340,4 +323,27 @@ pub async fn internal_command_processor<T: Transport + 'static, const SLOTS: usi
         }
         // No response needed for internal commands
     }
+}
+
+/// Run the Bluetooth host processor tasks
+///
+/// # Panics
+///
+/// This function will panic if Bluetooth host initialization fails.
+/// The panic occurs if `init_bluetooth_host(options)` returns an error.
+///
+pub async fn run<T: Transport + 'static, const SLOTS: usize, const BUFFER_SIZE: usize>(
+    options: BluetoothHostOptions,
+    controller: &'static ExternalController<T, SLOTS>,
+) {
+    crate::init_bluetooth_host(options)
+        .await
+        .expect("Failed to initialize Bluetooth host");
+
+    embassy_futures::select::select3(
+        hci_event_processor::<T, SLOTS, BUFFER_SIZE>(controller),
+        api_request_processor::<T, SLOTS>(controller),
+        internal_command_processor::<T, SLOTS>(controller),
+    )
+    .await;
 }

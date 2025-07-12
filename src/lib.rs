@@ -61,7 +61,7 @@ pub use address::BluetoothAddress;
 pub use class_of_device::{
     ClassOfDevice, DeviceDescription, MajorDeviceClass, MajorServiceClasses,
 };
-pub use processor::{api_request_processor, hci_event_processor, internal_command_processor};
+pub use processor::run;
 
 pub(crate) static REQUEST_CHANNEL: Channel<CriticalSectionRawMutex, Request, MAX_CHANNELS> =
     Channel::new();
