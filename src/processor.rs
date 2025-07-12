@@ -1,19 +1,27 @@
-//! Processor Tasks - HCI Event and API Request processing
+//! Processor Tasks - HCI Event, API Request, and Internal Command processing
 //!
-//! This module contains the main processing tasks that handle HCI events and API requests
-//! in parallel. Both tasks share the `BluetoothHost` state via a mutex for thread-safe access.
+//! This module contains the main processing tasks that handle HCI events, API requests,
+//! and internal commands in parallel. All tasks share the `BluetoothHost` state via a
+//! mutex for thread-safe access.
 //!
 //! # Usage
 //!
 //! These processor tasks should be spawned as separate Embassy tasks:
 //!
 //! ```ignore
-//! use bondybird::processor::{hci_event_processor, api_request_processor};
+//! use bondybird::processor::{hci_event_processor, api_request_processor, internal_command_processor};
 //!
 //! // In your Embassy spawner
 //! spawner.spawn(hci_event_processor::<Transport, 4, 512>(controller)).unwrap();
 //! spawner.spawn(api_request_processor::<Transport, 4>(controller)).unwrap();
+//! spawner.spawn(internal_command_processor::<Transport, 4>(controller)).unwrap();
 //! ```
+//!
+//! # Architecture
+//!
+//! * **HCI Event Processor**: Handles incoming HCI events and sends internal commands
+//! * **API Request Processor**: Handles external API requests with responses  
+//! * **Internal Command Processor**: Executes HCI commands triggered by events (no responses)
 //!
 //! # Generic Parameters
 //!
@@ -21,7 +29,9 @@
 //! * `SLOTS` - Maximum number of controller command slots (typically 4-8)
 //! * `BUFFER_SIZE` - Size of HCI read buffer in bytes (512+ recommended)
 
-use crate::{BluetoothState, REQUEST_CHANNEL, RESPONSE_CHANNEL, bluetooth_host};
+use crate::{
+    BluetoothState, INTERNAL_COMMAND_CHANNEL, REQUEST_CHANNEL, RESPONSE_CHANNEL, bluetooth_host,
+};
 use bt_hci::{
     ControllerToHostPacket,
     controller::{Controller, ExternalController},
@@ -63,7 +73,7 @@ pub async fn hci_event_processor<
                 ControllerToHostPacket::Event(event) => {
                     defmt::debug!("[PROCESSOR] HCI event: {:?}", defmt::Debug2Format(&event));
                     match bluetooth_host().await {
-                        Ok(mut host) => host.process_hci_event(&event),
+                        Ok(mut host) => host.process_hci_event(&event).await,
                         Err(e) => defmt::error!("[PROCESSOR] BluetoothHost not initialized: {}", e),
                     }
                 }
@@ -145,5 +155,46 @@ pub async fn api_request_processor<T: Transport + 'static, const SLOTS: usize>(
             defmt::Debug2Format(&response)
         );
         api_sender.send(response).await;
+    }
+}
+
+/// Internal Command Processor Task
+///
+/// Processes internal commands from HCI event processing (fire-and-forget, no responses).
+/// This task handles internal HCI commands that are triggered by events and don't need
+/// to send responses back to any API callers.
+///
+/// # Generic Parameters
+///
+/// * `T` - Transport layer implementation for HCI communication
+/// * `SLOTS` - Maximum number of controller slots for command queuing
+///
+/// # Arguments
+///
+/// * `controller` - Reference to the external Bluetooth controller
+///
+/// # Behavior
+///
+/// Runs indefinitely, processing internal commands as they arrive from the event processor.
+/// These commands execute HCI operations without sending responses.
+pub async fn internal_command_processor<T: Transport + 'static, const SLOTS: usize>(
+    controller: &'static ExternalController<T, SLOTS>,
+) -> ! {
+    let internal_receiver = INTERNAL_COMMAND_CHANNEL.receiver();
+
+    loop {
+        let internal_command = internal_receiver.receive().await;
+        defmt::debug!(
+            "[PROCESSOR] Internal command: {:?}",
+            defmt::Debug2Format(&internal_command)
+        );
+        match bluetooth_host().await {
+            Ok(mut host) => {
+                host.process_internal_command(internal_command, controller)
+                    .await;
+            }
+            Err(e) => defmt::error!("[PROCESSOR] BluetoothHost not initialized: {}", e),
+        }
+        // No response needed for internal commands
     }
 }
