@@ -3,48 +3,12 @@
 #![warn(missing_docs)]
 #![allow(dead_code, clippy::unused_async, clippy::too_many_lines)]
 
-//! # BondyBird - BR/EDR Bluetooth Host for Embedded Systems
-//!
-//! `BondyBird` provides a complete BR/EDR (Classic) Bluetooth Host implementation
-//! designed for embedded systems using Embassy and `no_std` environments.
-//!
-//! ## Key Features
-//!
-//! - **Runtime Configuration**: Configure inquiry parameters at startup
-//! - **Parallel Processing**: Separate tasks for HCI events and API requests
-//! - **Thread-Safe**: Embassy mutex-based shared state management
-//! - **Memory Efficient**: `no_std` compatible with heapless collections
-//!
-//! ## Getting Started
-//!
-//! 1. Initialize the BluetoothHost with desired configuration
-//! 2. Spawn the processor tasks
-//! 3. Use the API functions for Bluetooth operations
-//!
-//! ```rust,no_run
-//! use bondybird::{init_bluetooth_host, BluetoothHostOptions, hci_event_processor, api_request_processor};
-//!
-//! # async fn example() -> Result<(), &'static str> {
-//! // 1. Initialize with configuration
-//! let options = BluetoothHostOptions::default();
-//! init_bluetooth_host(options).await?;
-//!
-//! // 2. Spawn tasks (in your embassy main)
-//! // spawner.spawn(hci_event_processor::<Transport, 4, 512>(controller)).unwrap();
-//! // spawner.spawn(api_request_processor::<Transport, 4>(controller)).unwrap();
-//!
-//! // 3. Use API functions
-//! // bondybird::api::start_discovery().await?;
-//! # Ok(())
-//! # }
-//! ```
-
 mod address;
 pub mod api;
 mod class_of_device;
 pub mod constants;
 mod host;
-mod processor;
+pub mod processor;
 
 use crate::constants::{
     DEFAULT_INQUIRY_DURATION, GIAC, MAX_CHANNELS, MAX_DISCOVERED_DEVICES, UNLIMITED_RESPONSES,
@@ -61,7 +25,6 @@ pub use address::BluetoothAddress;
 pub use class_of_device::{
     ClassOfDevice, DeviceDescription, MajorDeviceClass, MajorServiceClasses,
 };
-pub use processor::run;
 
 pub(crate) static REQUEST_CHANNEL: Channel<CriticalSectionRawMutex, Request, MAX_CHANNELS> =
     Channel::new();

@@ -4,22 +4,22 @@
 
 ![Dall-E generated bondybird image](https://raw.githubusercontent.com/rttfd/static/refs/heads/main/bondybird/bondybird.png)
 
-# BondyBird
+# `BondyBird`
 
-BondyBird is a BR/EDR (Classic) Bluetooth Host implementation for embedded systems, built on Embassy and bt-hci crates for no_std environments. It features a parallel task architecture for optimal performance and responsiveness.
+`BondyBird` is a BR/EDR (Classic) Bluetooth Host implementation for embedded systems, built on Embassy and bt-hci crates for `no_std` environments. It features a parallel task architecture for optimal performance and responsiveness.
 
 ## Key Features
 
 - Parallel processing: HCI events and API requests handled in separate tasks
 - Thread-safe: Embassy mutex-based shared state
 - Low latency: Immediate HCI event processing
-- Memory efficient: heapless collections, no_std compatible
+- Memory efficient: heapless collections, `no_std` compatible
 - Type safe: Strong typing for addresses
 - Async/await API
 
 ## Architecture
 
-BondyBird uses parallel Embassy tasks:
+`BondyBird` uses parallel Embassy tasks:
 
 - HCI Event Processor: Handles incoming HCI events, sends internal commands
 - API Request Processor: Handles API requests and responses
@@ -27,7 +27,7 @@ BondyBird uses parallel Embassy tasks:
 
 ## Quickstart
 
-```rust,no_run
+```rust,ignore
 use bondybird::{processor, BluetoothHostOptions};
 use bt_hci::controller::ExternalController;
 use embassy_executor::Spawner;
@@ -51,12 +51,12 @@ async fn main(spawner: Spawner) {
 
 ## API Usage
 
-- Initialize BluetoothHost with options
-- Use API functions: start_discovery, get_devices, connect_device, disconnect_device, get_state
+- Initialize `BluetoothHost` with options
+- Use API functions: `start_discovery`, `get_devices`, `connect_device`, `disconnect_device`, `get_state`
 
 ## Example: Complete Bluetooth Flow
 
-```rust,no_run
+```rust,ignore
 use bondybird::{processor, BluetoothHostOptions};
 use embassy_time::{Duration, Timer};
 
