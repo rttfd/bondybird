@@ -51,13 +51,15 @@
 //!    let devices = get_devices().await.unwrap();
 //!    let _ = start_discovery().await;
 //!    let addr: String<64> = String::try_from("AA:BB:CC:DD:EE:FF").unwrap();
-//!    let _ = connect_device(addr).await;
+//!    let _ = connect_device(&addr).await;
 //!    # }
 //!    ```
 
+mod api_processor;
+mod internal_command_processor;
+
 use crate::{
-    BluetoothAddress, BluetoothDevice, BluetoothError, BluetoothHost, BluetoothState,
-    InternalCommand, Request, Response, constants,
+    BluetoothAddress, BluetoothDevice, BluetoothError, BluetoothHost, BluetoothState, constants,
 };
 use bt_hci::param::{AllowRoleSwitch, ClockOffset, PacketType, PageScanRepetitionMode};
 use bt_hci::{
@@ -111,88 +113,6 @@ impl BluetoothHost {
             bt_hci::param::CoreSpecificationVersion::VERSION_5_3 => 0x0C,
             bt_hci::param::CoreSpecificationVersion::VERSION_5_4 => 0x0D,
             _ => 0x00, // Default to 1.0B for unknown versions
-        }
-    }
-
-    /// Process an API request
-    pub(crate) async fn process_api_request<T: Transport + 'static, const SLOTS: usize>(
-        &mut self,
-        request: Request,
-        controller: &ExternalController<T, SLOTS>,
-    ) -> Response {
-        match request {
-            Request::Discover => {
-                if self.discovering {
-                    return Response::Error(BluetoothError::AlreadyInProgress);
-                }
-
-                match self.start_discovery(controller).await {
-                    Ok(()) => {
-                        self.discovering = true;
-                        self.state = BluetoothState::Discovering;
-                        Response::DiscoverStarted
-                    }
-                    Err(e) => Response::Error(e),
-                }
-            }
-            Request::StopDiscovery => {
-                if !self.discovering {
-                    return Response::Error(BluetoothError::InvalidParameter);
-                }
-
-                match self.stop_discovery(controller).await {
-                    Ok(()) => {
-                        self.discovering = false;
-                        self.state = BluetoothState::PoweredOn;
-                        Response::DiscoveryStopped
-                    }
-                    Err(e) => Response::Error(e),
-                }
-            }
-            Request::GetDevices => {
-                let devices_vec: Vec<BluetoothDevice, { constants::MAX_DISCOVERED_DEVICES }> =
-                    self.devices.values().cloned().collect();
-                Response::Devices(devices_vec)
-            }
-            Request::Pair(address) => match Self::parse_address(&address) {
-                Ok(addr) => match self.connect_device(addr, controller).await {
-                    Ok(()) => Response::PairComplete,
-                    Err(e) => Response::Error(e),
-                },
-                Err(e) => Response::Error(e),
-            },
-            Request::Disconnect(address) => match Self::parse_address(&address) {
-                Ok(addr) => match self.disconnect_device(addr, controller).await {
-                    Ok(()) => Response::DisconnectComplete,
-                    Err(e) => Response::Error(e),
-                },
-                Err(e) => Response::Error(e),
-            },
-            Request::GetState => Response::State(self.state),
-            Request::GetLocalInfo => Response::LocalInfo(self.local_info),
-            Request::GetPairedDevices => {
-                // Get devices that have active connections (paired/connected devices)
-                let mut paired_devices: Vec<BluetoothDevice, { constants::MAX_CHANNELS }> =
-                    Vec::new();
-
-                for (addr, _handle) in &self.connections {
-                    if let Some(device) = self.devices.get(addr) {
-                        if paired_devices.push(device.clone()).is_err() {
-                            // If we can't add more devices, break (shouldn't happen with proper constants)
-                            break;
-                        }
-                    }
-                }
-
-                Response::PairedDevices(paired_devices)
-            }
-            Request::GetDeviceName(address) => match Self::parse_address(&address) {
-                Ok(addr) => match self.get_device_name(addr, controller).await {
-                    Ok(name) => Response::DeviceName(address, name),
-                    Err(e) => Response::Error(e),
-                },
-                Err(e) => Response::Error(e),
-            },
         }
     }
 
@@ -319,51 +239,6 @@ impl BluetoothHost {
             }
             Err(e) => Err(Self::convert_hci_error(e)),
         }
-    }
-
-    fn parse_address(address: &str) -> Result<BluetoothAddress, BluetoothError> {
-        // Parse addresses in the format "XX:XX:XX:XX:XX:XX" or "XX-XX-XX-XX-XX-XX"
-        let mut addr = [0u8; 6];
-        let mut addr_index = 0;
-        let mut hex_chars = [0u8; 2];
-        let mut hex_index = 0;
-
-        for byte in address.bytes() {
-            match byte {
-                b':' | b'-' => {
-                    // Skip separators
-                }
-                b'0'..=b'9' | b'A'..=b'F' | b'a'..=b'f' => {
-                    if hex_index >= 2 {
-                        return Err(BluetoothError::InvalidParameter);
-                    }
-                    hex_chars[hex_index] = byte;
-                    hex_index += 1;
-
-                    if hex_index == 2 {
-                        // Parse the hex pair
-                        if addr_index >= 6 {
-                            return Err(BluetoothError::InvalidParameter);
-                        }
-
-                        let hex_str = core::str::from_utf8(&hex_chars)
-                            .map_err(|_| BluetoothError::InvalidParameter)?;
-                        addr[addr_index] = u8::from_str_radix(hex_str, 16)
-                            .map_err(|_| BluetoothError::InvalidParameter)?;
-
-                        addr_index += 1;
-                        hex_index = 0;
-                    }
-                }
-                _ => return Err(BluetoothError::InvalidParameter),
-            }
-        }
-
-        if addr_index != 6 || hex_index != 0 {
-            return Err(BluetoothError::InvalidParameter);
-        }
-
-        Ok(BluetoothAddress::new(addr))
     }
 
     /// Initialize the Bluetooth controller
@@ -515,139 +390,6 @@ impl BluetoothHost {
         }
     }
 
-    /// Process internal command (fire-and-forget, no response needed)
-    pub(crate) async fn process_internal_command<T: Transport + 'static, const SLOTS: usize>(
-        &mut self,
-        command: InternalCommand,
-        controller: &ExternalController<T, SLOTS>,
-    ) {
-        match command {
-            InternalCommand::AuthenticationRequested { conn_handle } => {
-                let auth_requested = cmd::link_control::AuthenticationRequested::new(
-                    bt_hci::param::ConnHandle::new(conn_handle),
-                );
-
-                if let Err(e) = controller.exec(&auth_requested).await {
-                    defmt::warn!(
-                        "Failed to send Authentication_Requested command for handle {}: {:?}",
-                        conn_handle,
-                        defmt::Debug2Format(&e)
-                    );
-                } else {
-                    defmt::debug!(
-                        "Authentication_Requested command sent for connection handle {}",
-                        conn_handle
-                    );
-                }
-            }
-            InternalCommand::LinkKeyRequestReply { bd_addr, link_key } => {
-                let reply = cmd::link_control::LinkKeyRequestReply::new(bd_addr.into(), link_key);
-
-                if let Err(e) = controller.exec(&reply).await {
-                    defmt::warn!(
-                        "Failed to send Link Key Request Reply for address {}: {:?}",
-                        bd_addr,
-                        defmt::Debug2Format(&e)
-                    );
-                } else {
-                    defmt::debug!("Link Key Request Reply sent");
-                }
-            }
-            InternalCommand::LinkKeyRequestNegativeReply { bd_addr } => {
-                let negative_reply =
-                    cmd::link_control::LinkKeyRequestNegativeReply::new(bd_addr.into());
-
-                if let Err(e) = controller.exec(&negative_reply).await {
-                    defmt::warn!(
-                        "Failed to send Link Key Request Negative Reply for address {}: {:?}",
-                        bd_addr,
-                        defmt::Debug2Format(&e)
-                    );
-                } else {
-                    defmt::debug!("Link Key Request Negative Reply sent");
-                }
-            }
-            InternalCommand::IoCapabilityRequestReply { bd_addr } => {
-                let io_reply = cmd::link_control::IoCapabilityRequestReply::new(
-                    bd_addr.into(),
-                    bt_hci::param::IoCapability::NoInputNoOutput,
-                    bt_hci::param::OobDataPresent::NotPresent,
-                    bt_hci::param::AuthenticationRequirements::MitmNotRequiredGeneralBonding,
-                );
-
-                if let Err(e) = controller.exec(&io_reply).await {
-                    defmt::warn!(
-                        "Failed to send IO Capability Request Reply for address {}: {:?}",
-                        bd_addr,
-                        defmt::Debug2Format(&e)
-                    );
-                } else {
-                    defmt::debug!("IO Capability Request Reply sent");
-                }
-            }
-            InternalCommand::UserConfirmationRequestReply { bd_addr } => {
-                let confirmation_reply =
-                    cmd::link_control::UserConfirmationRequestReply::new(bd_addr.into());
-
-                if let Err(e) = controller.exec(&confirmation_reply).await {
-                    defmt::warn!(
-                        "Failed to send User Confirmation Request Reply for address {}: {:?}",
-                        bd_addr,
-                        defmt::Debug2Format(&e)
-                    );
-                } else {
-                    defmt::debug!("User Confirmation Request Reply sent (auto-accepted)");
-                }
-            }
-            InternalCommand::PinCodeRequestReply { bd_addr, pin_code } => {
-                // PIN code length is typically the actual length of the PIN (4 for "0000")
-                if let Ok(pin_length) = u8::try_from(
-                    pin_code
-                        .iter()
-                        .position(|&x| x == 0)
-                        .unwrap_or(pin_code.len()),
-                ) {
-                    let pin_reply = cmd::link_control::PinCodeRequestReply::new(
-                        bd_addr.into(),
-                        pin_length,
-                        pin_code,
-                    );
-
-                    if let Err(e) = controller.exec(&pin_reply).await {
-                        defmt::warn!(
-                            "Failed to send PIN Code Request Reply for address {}: {:?}",
-                            bd_addr,
-                            defmt::Debug2Format(&e)
-                        );
-                    } else {
-                        defmt::debug!("PIN Code Request Reply sent");
-                    }
-                }
-            }
-            InternalCommand::UpsertDevice(device) => {
-                self.upsert_device(device);
-            }
-            InternalCommand::SetDiscovering(is_discovering) => {
-                self.discovering = is_discovering;
-            }
-            InternalCommand::SetState(state) => {
-                self.state = state;
-            }
-            InternalCommand::AddConnection(addr, conn_handle) => {
-                self.connections.insert(addr, conn_handle).ok();
-            }
-            InternalCommand::RemoveConnection(conn_handle) => {
-                self.remove_connections_by_handle(conn_handle);
-            }
-            InternalCommand::UpdateDeviceName(addr, name_bytes) => {
-                self.update_device_name(addr, name_bytes);
-            }
-            InternalCommand::StoreLinkKey(addr, link_key) => {
-                self.store_link_key(addr, link_key).ok();
-            }
-        }
-    }
-
     /// Convert HCI error to `BluetoothError` with detailed error information
     fn convert_hci_error<E: core::fmt::Debug>(error: E) -> BluetoothError {
         // Try to extract status code from the error
@@ -670,9 +412,7 @@ impl BluetoothHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        BluetoothAddress, BluetoothDevice, BluetoothError, BluetoothState, ClassOfDevice, constants,
-    };
+    use crate::{BluetoothAddress, BluetoothDevice, BluetoothState, ClassOfDevice, constants};
 
     // Helper function to create a test BluetoothHost
     fn create_test_host() -> BluetoothHost {
@@ -742,61 +482,6 @@ mod tests {
             BluetoothHost::core_spec_version_to_u8(CoreSpecificationVersion::VERSION_5_4),
             0x0D
         );
-    }
-
-    #[test]
-    fn test_parse_address_valid_colon_format() {
-        let address = "01:23:45:67:89:AB";
-        let result = BluetoothHost::parse_address(address);
-        assert!(result.is_ok());
-        let addr = result.unwrap();
-        assert_eq!(addr.as_bytes(), &[0x01, 0x23, 0x45, 0x67, 0x89, 0xAB]);
-    }
-
-    #[test]
-    fn test_parse_address_valid_dash_format() {
-        let address = "01-23-45-67-89-AB";
-        let result = BluetoothHost::parse_address(address);
-        assert!(result.is_ok());
-        let addr = result.unwrap();
-        assert_eq!(addr.as_bytes(), &[0x01, 0x23, 0x45, 0x67, 0x89, 0xAB]);
-    }
-
-    #[test]
-    fn test_parse_address_lowercase() {
-        let address = "01:23:45:67:89:ab";
-        let result = BluetoothHost::parse_address(address);
-        assert!(result.is_ok());
-        let addr = result.unwrap();
-        assert_eq!(addr.as_bytes(), &[0x01, 0x23, 0x45, 0x67, 0x89, 0xAB]);
-    }
-
-    #[test]
-    fn test_parse_address_invalid_length() {
-        let address = "01:23:45:67:89"; // Missing last byte
-        let result = BluetoothHost::parse_address(address);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), BluetoothError::InvalidParameter);
-    }
-
-    #[test]
-    fn test_parse_address_invalid_characters() {
-        let address = "01:23:45:67:89:XY"; // Invalid hex characters
-        let result = BluetoothHost::parse_address(address);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), BluetoothError::InvalidParameter);
-    }
-
-    #[test]
-    fn test_parse_address_invalid_format() {
-        let address = "012345678901"; // No separators but valid hex - this actually works!
-        let result = BluetoothHost::parse_address(address);
-        assert!(result.is_ok()); // The function accepts this format
-
-        // Test truly invalid formats
-        let invalid_address = "01:23:45:67:89"; // Incomplete
-        let result = BluetoothHost::parse_address(invalid_address);
-        assert!(result.is_err());
     }
 
     #[test]
