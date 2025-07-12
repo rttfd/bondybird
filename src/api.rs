@@ -24,7 +24,7 @@
 //! if let Some(device) = devices.first() {
 //!     let addr_str = device.addr.format_hex();
 //!     let addr_64: heapless::String<64> = heapless::String::try_from(addr_str.as_str()).unwrap();
-//!     let _ = connect_device(addr_64).await;
+//!     let _ = connect_device(&addr_64).await;
 //! }
 //! # }
 //! ```
@@ -68,8 +68,11 @@ pub async fn get_devices() -> Result<Vec<BluetoothDevice, MAX_DISCOVERED_DEVICES
 /// # Errors
 ///
 /// Returns an error if the address is invalid, the device is not found, connection fails, or the response is unexpected.
-pub async fn connect_device(address: String<64>) -> Result<(), BluetoothError> {
-    REQUEST_CHANNEL.sender().send(Request::Pair(address)).await;
+pub async fn connect_device(address: &str) -> Result<(), BluetoothError> {
+    REQUEST_CHANNEL
+        .sender()
+        .send(Request::Pair(address.try_into()?))
+        .await;
     match RESPONSE_CHANNEL.receiver().receive().await {
         Response::PairComplete => Ok(()),
         Response::Error(e) => Err(e),
@@ -82,10 +85,10 @@ pub async fn connect_device(address: String<64>) -> Result<(), BluetoothError> {
 /// # Errors
 ///
 /// Returns an error if the address is invalid, the device is not connected, the command fails, or the response is unexpected.
-pub async fn disconnect_device(address: String<64>) -> Result<(), BluetoothError> {
+pub async fn disconnect_device(address: &str) -> Result<(), BluetoothError> {
     REQUEST_CHANNEL
         .sender()
-        .send(Request::Disconnect(address))
+        .send(Request::Disconnect(address.try_into()?))
         .await;
     match RESPONSE_CHANNEL.receiver().receive().await {
         Response::DisconnectComplete => Ok(()),
@@ -166,25 +169,21 @@ pub async fn get_paired_devices()
 ///
 /// ```rust,no_run
 /// use bondybird::api::get_device_name;
-/// use heapless::String;
 ///
 /// # async fn example() -> Result<(), bondybird::BluetoothError> {
-/// let address: String<64> = String::try_from("12:34:56:78:9A:BC").unwrap();
-/// let (addr, name) = get_device_name(address).await?;
+/// let (addr, name) = get_device_name("12:34:56:78:9A:BC").await?;
 ///
 /// println!("Device {} is named: {}", addr.as_str(), name.as_str());
 /// # Ok(())
 /// # }
 /// ```
-pub async fn get_device_name(
-    address: String<64>,
-) -> Result<(String<64>, String<32>), BluetoothError> {
+pub async fn get_device_name(address: &str) -> Result<(String<17>, String<32>), BluetoothError> {
     REQUEST_CHANNEL
         .sender()
-        .send(Request::GetDeviceName(address))
+        .send(Request::GetDeviceName(address.try_into()?))
         .await;
     match RESPONSE_CHANNEL.receiver().receive().await {
-        Response::DeviceName(addr, name) => Ok((addr, name)),
+        Response::DeviceName(addr, name) => Ok((addr.into(), name)),
         Response::Error(e) => Err(e),
         _ => Err(BluetoothError::InvalidState),
     }
@@ -222,16 +221,17 @@ mod tests {
     #[test]
     fn test_request_enum_variants() {
         // Test that all Request variants can be created
+        let addr = BluetoothAddress::try_from("12:34:56:78:9A:BC").unwrap();
         let requests = [
             Request::Discover,
             Request::StopDiscovery,
             Request::GetDevices,
-            Request::Pair(heapless::String::try_from("12:34:56:78:9A:BC").unwrap()),
-            Request::Disconnect(heapless::String::try_from("12:34:56:78:9A:BC").unwrap()),
+            Request::Pair(addr.clone()),
+            Request::Disconnect(addr.clone()),
             Request::GetState,
             Request::GetLocalInfo,
             Request::GetPairedDevices,
-            Request::GetDeviceName(heapless::String::try_from("12:34:56:78:9A:BC").unwrap()),
+            Request::GetDeviceName(addr.clone()),
         ];
 
         // Just ensure they can be created and cloned
@@ -250,6 +250,7 @@ mod tests {
         paired_devices.push(test_device).unwrap();
 
         let test_name = heapless::String::try_from("Test Device").unwrap();
+        let addr = BluetoothAddress::try_from("12:34:56:78:9A:BC").unwrap();
 
         // Test that all Response variants can be created
         let responses = [
@@ -261,10 +262,7 @@ mod tests {
             Response::DisconnectComplete,
             Response::State(BluetoothState::PoweredOn),
             Response::LocalInfo(create_test_local_info()),
-            Response::DeviceName(
-                heapless::String::try_from("12:34:56:78:9A:BC").unwrap(),
-                test_name,
-            ),
+            Response::DeviceName(addr.clone(), test_name),
             Response::Error(BluetoothError::DeviceNotFound),
         ];
 
@@ -280,22 +278,21 @@ mod tests {
         // This is a compilation test since we don't have a real runtime here
 
         // Verify that the Request enum includes GetDeviceName
-        let address = heapless::String::try_from("12:34:56:78:9A:BC").unwrap();
+        let address = BluetoothAddress::try_from("12:34:56:78:9A:BC").unwrap();
         let request = Request::GetDeviceName(address.clone());
         match request {
             Request::GetDeviceName(addr) => {
-                assert_eq!(addr.as_str(), "12:34:56:78:9A:BC");
+                assert_eq!(addr.format_hex().as_str(), "12:34:56:78:9A:BC");
             }
             _ => panic!("GetDeviceName variant should exist"),
         }
 
         // Verify that Response enum includes DeviceName
-        let test_name = heapless::String::try_from("Test").unwrap();
-
-        let response = Response::DeviceName(address, test_name.clone());
+        let test_name = heapless::String::<32>::try_from("Test").unwrap();
+        let response = Response::DeviceName(address.clone(), test_name.clone());
         match response {
             Response::DeviceName(addr, name) => {
-                assert_eq!(addr.as_str(), "12:34:56:78:9A:BC");
+                assert_eq!(addr.format_hex().as_str(), "12:34:56:78:9A:BC");
                 assert_eq!(name.as_str(), "Test");
             }
             _ => panic!("DeviceName variant should exist"),
@@ -314,12 +311,12 @@ mod tests {
 
         for name_str in test_names {
             if let Ok(name) = heapless::String::<32>::try_from(name_str) {
-                let addr_str = heapless::String::try_from("AA:BB:CC:DD:EE:FF").unwrap();
-                let response = Response::DeviceName(addr_str.clone(), name.clone());
+                let addr = BluetoothAddress::try_from("AA:BB:CC:DD:EE:FF").unwrap();
+                let response = Response::DeviceName(addr, name.clone());
 
                 match response {
                     Response::DeviceName(addr, received_name) => {
-                        assert_eq!(addr.as_str(), "AA:BB:CC:DD:EE:FF");
+                        assert_eq!(addr.format_hex().as_str(), "AA:BB:CC:DD:EE:FF");
                         assert_eq!(received_name.as_str(), name_str);
                     }
                     _ => panic!("Should be DeviceName response"),

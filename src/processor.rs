@@ -30,13 +30,16 @@
 //! * `BUFFER_SIZE` - Size of HCI read buffer in bytes (512+ recommended)
 
 use crate::{
-    BluetoothState, INTERNAL_COMMAND_CHANNEL, REQUEST_CHANNEL, RESPONSE_CHANNEL, bluetooth_host,
+    BluetoothHost, BluetoothState, INTERNAL_COMMAND_CHANNEL, InternalCommand, REQUEST_CHANNEL,
+    RESPONSE_CHANNEL, bluetooth_host,
 };
 use bt_hci::{
     ControllerToHostPacket,
     controller::{Controller, ExternalController},
+    event::{self},
     transport::Transport,
 };
+use heapless::Vec;
 
 /// HCI Event Processor Task
 ///
@@ -72,9 +75,9 @@ pub async fn hci_event_processor<
             Ok(packet) => match packet {
                 ControllerToHostPacket::Event(event) => {
                     defmt::debug!("[PROCESSOR] HCI event: {:?}", defmt::Debug2Format(&event));
-                    match bluetooth_host().await {
-                        Ok(mut host) => host.process_hci_event(&event).await,
-                        Err(e) => defmt::error!("[PROCESSOR] BluetoothHost not initialized: {}", e),
+                    let commands = process_hci_event(&event);
+                    for command in commands {
+                        INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
                     }
                 }
                 ControllerToHostPacket::Acl(acl) => {
@@ -92,6 +95,146 @@ pub async fn hci_event_processor<
             }
         }
     }
+}
+
+/// Process HCI events and return InternalCommand(s) for all mutations
+fn process_hci_event(event: &event::Event<'_>) -> Vec<InternalCommand, 8> {
+    let mut commands = Vec::new();
+    match *event {
+        event::Event::InquiryResult(ref result) => {
+            for res in result.iter() {
+                if let Ok(device) = res.try_into() {
+                    commands.push(InternalCommand::UpsertDevice(device)).ok();
+                }
+            }
+        }
+        event::Event::InquiryComplete(ref complete) => {
+            commands.push(InternalCommand::SetDiscovering(false)).ok();
+            if complete.status.to_result().is_ok() {
+                commands
+                    .push(InternalCommand::SetState(BluetoothState::PoweredOn))
+                    .ok();
+            }
+        }
+        event::Event::ConnectionComplete(ref complete) => {
+            if complete.status.to_result().is_ok() {
+                if let Ok(addr) = complete.bd_addr.try_into() {
+                    let conn_handle = complete.handle.raw();
+                    commands
+                        .push(InternalCommand::AddConnection(addr, conn_handle))
+                        .ok();
+                    commands
+                        .push(InternalCommand::SetState(BluetoothState::Connected))
+                        .ok();
+                    commands
+                        .push(InternalCommand::AuthenticationRequested { conn_handle })
+                        .ok();
+                }
+            } else {
+                commands
+                    .push(InternalCommand::SetState(BluetoothState::PoweredOn))
+                    .ok();
+            }
+        }
+        event::Event::DisconnectionComplete(ref complete) => {
+            if complete.status.to_result().is_ok() {
+                let conn_handle = complete.handle.raw();
+                commands
+                    .push(InternalCommand::RemoveConnection(conn_handle))
+                    .ok();
+                commands
+                    .push(InternalCommand::SetState(BluetoothState::PoweredOn))
+                    .ok();
+            }
+        }
+        event::Event::RemoteNameRequestComplete(ref complete) => {
+            if complete.status.to_result().is_ok() {
+                if let Ok(addr) = complete.bd_addr.try_into() {
+                    let name = BluetoothHost::copy_device_name(&complete.remote_name);
+                    commands
+                        .push(InternalCommand::UpdateDeviceName(addr, name))
+                        .ok();
+                }
+            }
+        }
+        event::Event::ExtendedInquiryResult(ref result) => {
+            if let Ok(device) = result.try_into() {
+                commands.push(InternalCommand::UpsertDevice(device)).ok();
+            }
+        }
+        event::Event::InquiryResultWithRssi(ref result) => {
+            for res in result.iter() {
+                if let Ok(device) = res.try_into() {
+                    commands.push(InternalCommand::UpsertDevice(device)).ok();
+                }
+            }
+        }
+        event::Event::PinCodeRequest(ref request) => {
+            if let Ok(addr) = request.bd_addr.try_into() {
+                let mut pin_code = [0u8; 16];
+                pin_code[0] = b'0';
+                pin_code[1] = b'0';
+                pin_code[2] = b'0';
+                pin_code[3] = b'0';
+                commands
+                    .push(InternalCommand::PinCodeRequestReply {
+                        bd_addr: addr,
+                        pin_code,
+                    })
+                    .ok();
+            }
+        }
+        event::Event::LinkKeyRequest(ref request) => {
+            if let Ok(addr) = request.bd_addr.try_into() {
+                commands
+                    .push(InternalCommand::LinkKeyRequestNegativeReply { bd_addr: addr })
+                    .ok();
+            }
+        }
+        event::Event::IoCapabilityRequest(ref request) => {
+            if let Ok(addr) = request.bd_addr.try_into() {
+                commands
+                    .push(InternalCommand::IoCapabilityRequestReply { bd_addr: addr })
+                    .ok();
+            }
+        }
+        event::Event::UserConfirmationRequest(ref request) => {
+            if let Ok(addr) = request.bd_addr.try_into() {
+                commands
+                    .push(InternalCommand::UserConfirmationRequestReply { bd_addr: addr })
+                    .ok();
+            }
+        }
+        event::Event::LinkKeyNotification(ref notification) => {
+            if let Ok(addr) = notification.bd_addr.try_into() {
+                commands
+                    .push(InternalCommand::StoreLinkKey(addr, notification.link_key))
+                    .ok();
+            }
+        }
+        event::Event::AuthenticationComplete(ref complete) => {
+            if complete.status.to_result().is_ok() {
+                // On successful authentication, set state to PoweredOn
+                commands
+                    .push(InternalCommand::SetState(BluetoothState::PoweredOn))
+                    .ok();
+                // Optionally remove connection if needed (depends on your protocol)
+                // If you want to remove connection on auth complete, uncomment below:
+                // let conn_handle = complete.handle.raw();
+                // commands.push(InternalCommand::RemoveConnection(conn_handle)).ok();
+            } else {
+                // On failed authentication, set state to PoweredOn (or error state)
+                commands
+                    .push(InternalCommand::SetState(BluetoothState::PoweredOn))
+                    .ok();
+            }
+        }
+        _ => {
+            // Handle other events if necessary, currently ignored
+            defmt::debug!("[EVENT] Unhandled event: {:?}", event);
+        }
+    }
+    commands
 }
 
 /// API Request Processor Task

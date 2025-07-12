@@ -1,12 +1,7 @@
 #![no_std]
 #![doc = include_str!("../README.md")]
 #![warn(missing_docs)]
-#![allow(
-    dead_code,
-    clippy::unused_async,
-    clippy::large_enum_variant,
-    clippy::too_many_lines
-)]
+#![allow(dead_code, clippy::unused_async, clippy::too_many_lines)]
 
 //! # BondyBird - BR/EDR Bluetooth Host for Embedded Systems
 //!
@@ -44,11 +39,12 @@
 //! # }
 //! ```
 
+mod address;
 pub mod api;
-pub mod class_of_device;
+mod class_of_device;
 pub mod constants;
-pub mod host;
-pub mod processor;
+mod host;
+mod processor;
 
 use crate::constants::{
     DEFAULT_INQUIRY_DURATION, GIAC, MAX_CHANNELS, MAX_DISCOVERED_DEVICES, UNLIMITED_RESPONSES,
@@ -61,10 +57,7 @@ use embassy_sync::{
 };
 use heapless::{FnvIndexMap, String, Vec};
 
-pub use api::{
-    connect_device, disconnect_device, get_device_name, get_devices, get_paired_devices, get_state,
-    start_discovery,
-};
+pub use address::BluetoothAddress;
 pub use class_of_device::{
     ClassOfDevice, DeviceDescription, MajorDeviceClass, MajorServiceClasses,
 };
@@ -153,82 +146,6 @@ pub async fn bluetooth_host<'a>()
         return Err("BluetoothHost not initialized");
     }
     Ok(MutexGuard::map(guard, |opt| opt.as_mut().unwrap()))
-}
-
-/// A Bluetooth Device Address (`BD_ADDR`) wrapper for type safety
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BluetoothAddress(pub [u8; 6]);
-
-impl BluetoothAddress {
-    /// Create a new Bluetooth address from bytes
-    #[must_use]
-    pub const fn new(addr: [u8; 6]) -> Self {
-        Self(addr)
-    }
-
-    /// Get the raw address bytes
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 6] {
-        &self.0
-    }
-
-    /// Format the address as a colon-separated hex string
-    #[must_use]
-    pub fn format_hex(&self) -> heapless::String<17> {
-        let mut result = heapless::String::new();
-        for (i, byte) in self.0.iter().enumerate() {
-            if i > 0 {
-                result.push(':').ok();
-            }
-            // Format byte as hex
-            let hex_chars = [
-                '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
-            ];
-            result.push(hex_chars[(byte >> 4) as usize]).ok();
-            result.push(hex_chars[(byte & 0x0F) as usize]).ok();
-        }
-        result
-    }
-}
-
-impl From<[u8; 6]> for BluetoothAddress {
-    fn from(addr: [u8; 6]) -> Self {
-        Self(addr)
-    }
-}
-
-impl From<BluetoothAddress> for [u8; 6] {
-    fn from(addr: BluetoothAddress) -> Self {
-        addr.0
-    }
-}
-
-impl From<BluetoothAddress> for bt_hci::param::BdAddr {
-    fn from(addr: BluetoothAddress) -> Self {
-        bt_hci::param::BdAddr::new(addr.0)
-    }
-}
-
-impl TryFrom<&[u8]> for BluetoothAddress {
-    type Error = BluetoothError;
-
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        if bytes.len() == 6 {
-            let mut addr = [0u8; 6];
-            addr.copy_from_slice(bytes);
-            Ok(BluetoothAddress(addr))
-        } else {
-            Err(BluetoothError::InvalidParameter)
-        }
-    }
-}
-
-impl TryFrom<bt_hci::param::BdAddr> for BluetoothAddress {
-    type Error = BluetoothError;
-
-    fn try_from(bd_addr: bt_hci::param::BdAddr) -> Result<Self, Self::Error> {
-        bd_addr.raw().try_into()
-    }
 }
 
 /// Represents a discovered Bluetooth device with its properties
@@ -577,9 +494,9 @@ pub(crate) enum Request {
     /// Get list of discovered devices
     GetDevices,
     /// Connect/pair with a device
-    Pair(String<64>), // Device address as string
+    Pair(BluetoothAddress),
     /// Disconnect from a device
-    Disconnect(String<64>),
+    Disconnect(BluetoothAddress),
     /// Get current Bluetooth state
     GetState,
     /// Get local Bluetooth information
@@ -587,30 +504,49 @@ pub(crate) enum Request {
     /// Get list of paired/connected devices
     GetPairedDevices,
     /// Get device name by address
-    GetDeviceName(String<64>), // Device address as string
+    GetDeviceName(BluetoothAddress),
 }
 
 /// Internal async commands from event processor (fire-and-forget, no response needed)
 #[derive(Debug, Clone)]
 pub(crate) enum InternalCommand {
     /// Send Authentication Requested command
-    AuthenticationRequested { conn_handle: u16 },
+    AuthenticationRequested {
+        conn_handle: u16,
+    },
     /// Send Link Key Request Reply
     LinkKeyRequestReply {
         bd_addr: BluetoothAddress,
         link_key: [u8; 16],
     },
     /// Send Link Key Request Negative Reply
-    LinkKeyRequestNegativeReply { bd_addr: BluetoothAddress },
+    LinkKeyRequestNegativeReply {
+        bd_addr: BluetoothAddress,
+    },
     /// Send IO Capability Request Reply
-    IoCapabilityRequestReply { bd_addr: BluetoothAddress },
+    IoCapabilityRequestReply {
+        bd_addr: BluetoothAddress,
+    },
     /// Send User Confirmation Request Reply
-    UserConfirmationRequestReply { bd_addr: BluetoothAddress },
+    UserConfirmationRequestReply {
+        bd_addr: BluetoothAddress,
+    },
     /// Send PIN Code Request Reply
     PinCodeRequestReply {
         bd_addr: BluetoothAddress,
         pin_code: [u8; 16],
     },
+    /// Host state mutations (added for event.rs decoupling)
+    UpsertDevice(BluetoothDevice),
+    SetDiscovering(bool),
+    SetState(BluetoothState),
+    AddConnection(BluetoothAddress, u16),
+    RemoveConnection(u16),
+    UpdateDeviceName(
+        BluetoothAddress,
+        [u8; crate::constants::MAX_DEVICE_NAME_LENGTH],
+    ),
+    StoreLinkKey(BluetoothAddress, [u8; 16]),
 }
 
 /// API responses sent back from the Bluetooth processing tasks
@@ -635,7 +571,7 @@ pub(crate) enum Response {
     /// Local Bluetooth information
     LocalInfo(LocalDeviceInfo),
     /// Device name (up to 32 bytes)
-    DeviceName(String<64>, String<32>), // Address and name
+    DeviceName(BluetoothAddress, String<32>), // Address and name
     /// Error occurred
     Error(BluetoothError),
 }
@@ -643,64 +579,6 @@ pub(crate) enum Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_bluetooth_address_creation() {
-        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
-        assert_eq!(addr.as_bytes(), &[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
-    }
-
-    #[test]
-    fn test_bluetooth_address_format_hex() {
-        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
-        let formatted = addr.format_hex();
-        assert_eq!(formatted.as_str(), "12:34:56:78:9A:BC");
-    }
-
-    #[test]
-    fn test_bluetooth_address_format_hex_edge_cases() {
-        // Test zero address
-        let addr_zero = BluetoothAddress::new([0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-        assert_eq!(addr_zero.format_hex().as_str(), "00:00:00:00:00:00");
-
-        // Test max address
-        let addr_max = BluetoothAddress::new([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
-        assert_eq!(addr_max.format_hex().as_str(), "FF:FF:FF:FF:FF:FF");
-
-        // Test mixed case
-        let addr_mixed = BluetoothAddress::new([0x0A, 0xB1, 0x2C, 0xD3, 0x4E, 0xF5]);
-        assert_eq!(addr_mixed.format_hex().as_str(), "0A:B1:2C:D3:4E:F5");
-    }
-
-    #[test]
-    fn test_bluetooth_address_conversions() {
-        let bytes = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC];
-
-        // Test From<[u8; 6]>
-        let addr: BluetoothAddress = bytes.into();
-        assert_eq!(addr.as_bytes(), &bytes);
-
-        // Test Into<[u8; 6]>
-        let converted_bytes: [u8; 6] = addr.into();
-        assert_eq!(converted_bytes, bytes);
-    }
-
-    #[test]
-    fn test_bluetooth_address_try_from_slice() {
-        // Test valid slice
-        let bytes = &[0x12u8, 0x34u8, 0x56u8, 0x78u8, 0x9Au8, 0xBCu8][..];
-        let addr = BluetoothAddress::try_from(bytes).unwrap();
-        assert_eq!(addr.as_bytes(), &[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
-
-        // Test invalid lengths
-        let bytes_short = &[0x12u8, 0x34u8, 0x56u8][..];
-        let bytes_long = &[
-            0x12u8, 0x34u8, 0x56u8, 0x78u8, 0x9Au8, 0xBCu8, 0xDEu8, 0xF0u8,
-        ][..];
-
-        assert!(BluetoothAddress::try_from(bytes_short).is_err());
-        assert!(BluetoothAddress::try_from(bytes_long).is_err());
-    }
 
     #[test]
     fn test_bluetooth_device_creation() {
@@ -770,31 +648,6 @@ mod tests {
             computer_device.class_of_device,
             Some(ClassOfDevice::from_raw(0x0010_0104))
         );
-    }
-
-    #[test]
-    fn test_bluetooth_device_name_handling() {
-        let addr = BluetoothAddress::new([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
-
-        // Test with various name lengths using the new string API
-        let short_name_bytes = [
-            b'H', b'i', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0,
-        ];
-        let full_name_str = "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"; // 32 'T' characters
-        let empty_name_bytes = [0u8; 32]; // Empty name
-
-        let device_short = BluetoothDevice::new(addr).with_name_bytes(short_name_bytes);
-        let device_full =
-            BluetoothDevice::new(addr).with_name(String::try_from(full_name_str).unwrap());
-        let device_empty = BluetoothDevice::new(addr).with_name_bytes(empty_name_bytes);
-
-        assert_eq!(device_short.name, Some(String::try_from("Hi").unwrap()));
-        assert_eq!(
-            device_full.name,
-            Some(String::try_from(full_name_str).unwrap())
-        );
-        assert_eq!(device_empty.name, Some(String::try_from("").unwrap()));
     }
 
     #[test]
