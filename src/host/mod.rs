@@ -121,7 +121,7 @@ impl BluetoothHost {
         controller: &ExternalController<T, SLOTS>,
     ) -> Result<(), BluetoothError> {
         let options = self.options();
-        let inquiry_cmd = bt_hci::cmd::link_control::Inquiry::new(
+        let inquiry_cmd = cmd::link_control::Inquiry::new(
             options.lap,
             options.inquiry_length,
             options.num_responses,
@@ -218,9 +218,9 @@ impl BluetoothHost {
         // Use Remote Name Request to get the device name
         let remote_name_req = cmd::link_control::RemoteNameRequest::new(
             addr.into(),
-            bt_hci::param::PageScanRepetitionMode::R1,
+            PageScanRepetitionMode::R1,
             constants::RESERVED_FIELD,
-            bt_hci::param::ClockOffset::new(),
+            ClockOffset::new(),
         );
 
         match controller.exec(&remote_name_req).await {
@@ -324,6 +324,7 @@ impl BluetoothHost {
             .exec(&read_bd_addr)
             .await
             .map_err(Self::convert_hci_error)?;
+
         defmt::debug!("Local BD_ADDR: {:?}", defmt::Debug2Format(&bd_addr));
 
         self.local_info.bd_addr = bd_addr.try_into().ok();

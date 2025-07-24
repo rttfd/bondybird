@@ -28,6 +28,7 @@
 //! let services = cod.major_service_classes();
 //! ```
 
+use core::fmt::Write;
 use heapless::Vec;
 
 /// Class of Device (`CoD`) indicating device type and capabilities
@@ -98,6 +99,20 @@ impl ClassOfDevice {
             minor_class: major.minor_class_description(minor),
             services: services.descriptions(),
         }
+    }
+
+    /// Convert the Class of Device to a heapless string
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the string cannot be formatted
+    /// within the allocated size.
+    ///
+    #[must_use]
+    pub fn to_string<const N: usize>(&self) -> heapless::String<N> {
+        let mut buffer = heapless::String::<N>::new();
+        write!(buffer, "{self}").unwrap();
+        buffer
     }
 }
 
