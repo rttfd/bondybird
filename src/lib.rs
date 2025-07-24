@@ -8,6 +8,7 @@ pub mod api;
 mod class_of_device;
 pub mod constants;
 mod host;
+pub mod l2cap;
 pub mod processor;
 
 use crate::constants::{
