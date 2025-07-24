@@ -97,7 +97,7 @@ pub async fn disconnect_device(address: &str) -> Result<(), BluetoothError> {
     }
 }
 
-/// Get the current Bluetooth state (powered on, discovering, connected, etc).
+/// Get the current Bluetooth state (powered on, discovering, connected, etc.).
 ///
 /// # Errors
 ///
@@ -243,10 +243,10 @@ mod tests {
     #[test]
     fn test_response_enum_variants() {
         let test_device = create_test_device();
-        let mut devices = heapless::Vec::new();
+        let mut devices = Vec::new();
         devices.push(test_device.clone()).unwrap();
 
-        let mut paired_devices = heapless::Vec::new();
+        let mut paired_devices = Vec::new();
         paired_devices.push(test_device).unwrap();
 
         let test_name = heapless::String::try_from("Test Device").unwrap();
@@ -328,8 +328,7 @@ mod tests {
     #[test]
     fn test_max_discovered_devices_constant() {
         // Test that we can create a Vec with the maximum capacity
-        let mut devices: heapless::Vec<BluetoothDevice, MAX_DISCOVERED_DEVICES> =
-            heapless::Vec::new();
+        let mut devices: Vec<BluetoothDevice, MAX_DISCOVERED_DEVICES> = Vec::new();
 
         // Fill it up to capacity
         for i in 0..MAX_DISCOVERED_DEVICES {
@@ -354,8 +353,7 @@ mod tests {
         let formatted = addr.format_hex();
 
         // Should be able to convert the formatted address to the API string type
-        let api_address: heapless::String<64> =
-            heapless::String::try_from(formatted.as_str()).unwrap();
+        let api_address: String<64> = heapless::String::try_from(formatted.as_str()).unwrap();
         assert_eq!(api_address.as_str(), "12:34:56:78:9A:BC");
     }
 
@@ -363,7 +361,7 @@ mod tests {
     fn test_heapless_string_conversion() {
         // Test string conversion for addresses (API requirement)
         let addr_str = "12:34:56:78:9A:BC";
-        let heapless_str: heapless::String<64> = heapless::String::try_from(addr_str).unwrap();
+        let heapless_str: String<64> = heapless::String::try_from(addr_str).unwrap();
         assert_eq!(heapless_str.as_str(), addr_str);
         assert_eq!(heapless_str.len(), 17);
     }
@@ -374,7 +372,7 @@ mod tests {
         let long_str = "1234567890123456789012345678901234567890123456789012345678901234";
         assert_eq!(long_str.len(), 64);
 
-        let heapless_str: heapless::String<64> = heapless::String::try_from(long_str).unwrap();
+        let heapless_str: String<64> = heapless::String::try_from(long_str).unwrap();
         assert_eq!(heapless_str.as_str(), long_str);
         assert_eq!(heapless_str.len(), 64);
     }
@@ -385,7 +383,7 @@ mod tests {
         let too_long_str = "12345678901234567890123456789012345678901234567890123456789012345";
         assert_eq!(too_long_str.len(), 65);
 
-        let result: Result<heapless::String<64>, _> = heapless::String::try_from(too_long_str);
+        let result: Result<String<64>, _> = heapless::String::try_from(too_long_str);
         assert!(result.is_err());
     }
 }

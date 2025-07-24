@@ -15,11 +15,9 @@ bt-hci = "0.3.3"
 defmt = "1.0.1"
 embassy-futures = "0.1.1"
 embassy-sync = { version = "0.7.0", features = ["defmt"] }
-embassy-time = "0.4.0"
 heapless = "0.8.0"
 
 [patch.crates-io]
 bt-hci = { git = "https://github.com/rttfd/bt-hci.git", branch = "renik" }
 embassy-futures = { git = "https://github.com/rttfd/embassy.git", branch = "renik" }
 embassy-sync = { git = "https://github.com/rttfd/embassy.git", branch = "renik" }
-embassy-time = { git = "https://github.com/rttfd/embassy.git", branch = "renik" }

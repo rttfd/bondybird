@@ -170,7 +170,7 @@ mod tests {
         assert_eq!(addr_from_str.as_bytes(), &bytes);
 
         // Into<heapless::String<17>>
-        let hex_string: heapless::String<17> = addr.into();
+        let hex_string: String<17> = addr.into();
         assert_eq!(hex_string.as_str(), "12:34:56:78:9A:BC");
     }
 
