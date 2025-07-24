@@ -137,6 +137,60 @@ impl BluetoothHost {
             InternalCommand::StoreLinkKey(addr, link_key) => {
                 self.store_link_key(addr, link_key).ok();
             }
+            InternalCommand::AddAclConnection(addr, conn_handle) => {
+                // Add ACL connection to the ACL manager
+                if let Err(e) = self.acl_manager.add_connection(conn_handle, addr) {
+                    defmt::warn!("Failed to add ACL connection {}: {}", conn_handle, e);
+                } else {
+                    defmt::debug!("Added ACL connection {} for {}", conn_handle, addr);
+                }
+            }
+            InternalCommand::RemoveAclConnection(conn_handle) => {
+                // Remove ACL connection from the ACL manager
+                if let Some(_connection) = self.acl_manager.remove_connection(conn_handle) {
+                    defmt::debug!("Removed ACL connection {}", conn_handle);
+                }
+            }
+            InternalCommand::ProcessAclData {
+                handle,
+                packet_boundary,
+                broadcast_flag,
+                data,
+            } => {
+                use crate::acl::{AclHeader, AclPacket, BroadcastFlag, PacketBoundary};
+
+                // Convert raw values back to enum types
+                let boundary = match packet_boundary {
+                    0 => PacketBoundary::FirstNonFlushable,
+                    1 => PacketBoundary::ContinuingFragment,
+                    2 => PacketBoundary::FirstFlushable,
+                    3 => PacketBoundary::CompletePdu,
+                    _ => {
+                        defmt::warn!("Invalid packet boundary flag: {}", packet_boundary);
+                        return;
+                    }
+                };
+
+                let broadcast = match broadcast_flag {
+                    0 => BroadcastFlag::PointToPoint,
+                    1 => BroadcastFlag::ActiveBroadcast,
+                    2 => BroadcastFlag::PiconetBroadcast,
+                    3 => BroadcastFlag::Reserved,
+                    _ => {
+                        defmt::warn!("Invalid broadcast flag: {}", broadcast_flag);
+                        return;
+                    }
+                };
+
+                // Create ACL packet and process it
+                #[allow(clippy::cast_possible_truncation)]
+                let header = AclHeader::new(handle, boundary, broadcast, data.len() as u16);
+                let packet = AclPacket::new(header, data);
+
+                if let Err(e) = self.acl_manager.process_acl_packet(&packet) {
+                    defmt::error!("Failed to process ACL data for handle {}: {}", handle, e);
+                }
+            }
         }
     }
 }
