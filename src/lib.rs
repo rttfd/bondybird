@@ -3,6 +3,7 @@
 #![warn(missing_docs)]
 #![allow(dead_code, clippy::unused_async, clippy::too_many_lines)]
 
+pub mod a2dp;
 pub mod acl;
 mod address;
 pub mod api;
