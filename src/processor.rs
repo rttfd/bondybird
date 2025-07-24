@@ -89,6 +89,38 @@ use bt_hci::{
 };
 use heapless::Vec;
 
+/// Convert `bt_hci` ACL packet to internal command
+fn create_acl_command(
+    acl_data: &bt_hci::data::AclPacket<'_>,
+) -> Result<InternalCommand, &'static str> {
+    // Convert packet boundary flag
+    let packet_boundary = match acl_data.boundary_flag() {
+        bt_hci::data::AclPacketBoundary::FirstNonFlushable => 0,
+        bt_hci::data::AclPacketBoundary::Continuing => 1,
+        bt_hci::data::AclPacketBoundary::FirstFlushable => 2,
+        bt_hci::data::AclPacketBoundary::Complete => 3,
+    };
+
+    // Convert broadcast flag
+    let broadcast_flag = match acl_data.broadcast_flag() {
+        bt_hci::data::AclBroadcastFlag::PointToPoint => 0,
+        bt_hci::data::AclBroadcastFlag::BrEdrBroadcast => 1,
+        bt_hci::data::AclBroadcastFlag::Reserved => 2,
+    };
+
+    // Copy data into Vec
+    let mut data = heapless::Vec::new();
+    data.extend_from_slice(acl_data.data())
+        .map_err(|()| "ACL data too large")?;
+
+    Ok(InternalCommand::ProcessAclData {
+        handle: acl_data.handle().into_inner(),
+        packet_boundary,
+        broadcast_flag,
+        data,
+    })
+}
+
 async fn hci_event_processor<
     T: Transport + 'static,
     const SLOTS: usize,
@@ -111,6 +143,15 @@ async fn hci_event_processor<
                 }
                 ControllerToHostPacket::Acl(acl) => {
                     defmt::debug!("[HCI_EVENT] HCI ACL: {:?}", defmt::Debug2Format(&acl));
+                    // Convert ACL data to internal command and send through channel
+                    match create_acl_command(&acl) {
+                        Ok(command) => {
+                            INTERNAL_COMMAND_CHANNEL.sender().send(command).await;
+                        }
+                        Err(e) => {
+                            defmt::error!("[HCI_EVENT] ACL command creation error: {}", e);
+                        }
+                    }
                 }
                 ControllerToHostPacket::Sync(sync) => {
                     defmt::debug!("[HCI_EVENT] HCI SYNC: {:?}", defmt::Debug2Format(&sync));
@@ -153,6 +194,9 @@ fn process_hci_event(event: &event::Event<'_>) -> Vec<InternalCommand, 8> {
                         .push(InternalCommand::AddConnection(addr, conn_handle))
                         .ok();
                     commands
+                        .push(InternalCommand::AddAclConnection(addr, conn_handle))
+                        .ok();
+                    commands
                         .push(InternalCommand::SetState(BluetoothState::Connected))
                         .ok();
                     commands
@@ -170,6 +214,9 @@ fn process_hci_event(event: &event::Event<'_>) -> Vec<InternalCommand, 8> {
                 let conn_handle = complete.handle.raw();
                 commands
                     .push(InternalCommand::RemoveConnection(conn_handle))
+                    .ok();
+                commands
+                    .push(InternalCommand::RemoveAclConnection(conn_handle))
                     .ok();
                 commands
                     .push(InternalCommand::SetState(BluetoothState::PoweredOn))

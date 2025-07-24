@@ -3,6 +3,7 @@
 #![warn(missing_docs)]
 #![allow(dead_code, clippy::unused_async, clippy::too_many_lines)]
 
+pub mod acl;
 mod address;
 pub mod api;
 mod class_of_device;
@@ -378,6 +379,8 @@ pub struct BluetoothHost {
     discovering: bool,
     /// Host configuration options
     options: BluetoothHostOptions,
+    /// ACL data manager for L2CAP routing
+    acl_manager: crate::acl::AclManager,
 }
 
 impl BluetoothHost {
@@ -398,6 +401,7 @@ impl BluetoothHost {
             local_info: LocalDeviceInfo::default(),
             discovering: false,
             options,
+            acl_manager: crate::acl::AclManager::new(),
         }
     }
 
@@ -473,6 +477,7 @@ pub(crate) enum Request {
 
 /// Internal async commands from event processor (fire-and-forget, no response needed)
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum InternalCommand {
     /// Send Authentication Requested command
     AuthenticationRequested {
@@ -511,6 +516,16 @@ pub(crate) enum InternalCommand {
         [u8; crate::constants::MAX_DEVICE_NAME_LENGTH],
     ),
     StoreLinkKey(BluetoothAddress, [u8; 16]),
+    /// ACL connection management
+    AddAclConnection(BluetoothAddress, u16),
+    RemoveAclConnection(u16),
+    /// Process ACL data packet
+    ProcessAclData {
+        handle: u16,
+        packet_boundary: u8,
+        broadcast_flag: u8,
+        data: heapless::Vec<u8, 1024>,
+    },
 }
 
 /// API responses sent back from the Bluetooth processing tasks
