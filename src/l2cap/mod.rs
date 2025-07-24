@@ -1,17 +1,13 @@
 //! L2CAP (Logical Link Control and Adaptation Protocol) Implementation
 //!
-//! L2CAP provides connection-oriented and connectionless data services to upper layer
-//! protocols with protocol multiplexing, segmentation and reassembly, and group abstractions.
+//! This module provides L2CAP protocol support for Bluetooth audio streaming,
+//! implementing connection-oriented channels, signaling, and data transfer
+//! as defined in the Bluetooth Core Specification.
 
 pub mod channel;
 pub mod packet;
+pub mod processor;
+pub mod signaling;
 
-// TODO: Uncomment when L2CAP is integrated with the rest of the system
-// pub use packet::{
-//     ChannelId, L2capError, L2capHeader, L2capPacket, ProtocolServiceMultiplexer,
-//     cid, psm,
-// };
-// pub use channel::{
-//     ChannelManager, ChannelState, ConfigurationOptions, FlowControlMode,
-//     L2capChannel, QosServiceType, QualityOfService,
-// };
+// TODO: Uncomment these modules as they are implemented
+// pub mod config;
