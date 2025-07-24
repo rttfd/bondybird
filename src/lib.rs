@@ -12,6 +12,7 @@ pub mod constants;
 mod host;
 pub mod l2cap;
 pub mod processor;
+pub mod sdp;
 
 use crate::constants::{
     DEFAULT_INQUIRY_DURATION, GIAC, MAX_CHANNELS, MAX_DISCOVERED_DEVICES, UNLIMITED_RESPONSES,
