@@ -3,15 +3,47 @@
 #![warn(missing_docs)]
 #![allow(dead_code, clippy::unused_async, clippy::too_many_lines)]
 
+/// Advanced Audio Distribution Profile (A2DP) implementation
+///
+/// Provides audio streaming over Bluetooth with AVDTP protocol and SBC codec support.
 pub mod a2dp;
+
+/// Asynchronous Connectionless (ACL) link management
+///
+/// Handles ACL connections, data routing, and connection lifecycle management.
 pub mod acl;
+
+/// Bluetooth device address types and utilities
 mod address;
+
+/// High-level async API for Bluetooth operations
+///
+/// Provides application-friendly functions for device discovery, connection, and state management.
 pub mod api;
+
+/// Bluetooth Class of Device parsing and utilities
 mod class_of_device;
+
+/// Protocol constants and configuration parameters
 pub mod constants;
+
+/// Bluetooth host state management
 mod host;
+
+/// Logical Link Control and Adaptation Protocol (L2CAP) implementation
+///
+/// Provides channel management, signaling protocol, and packet routing over ACL connections.
 pub mod l2cap;
+
+/// Embassy task processor for parallel Bluetooth event handling
+///
+/// Orchestrates HCI event processing, API request handling, and internal command execution.
 pub mod processor;
+
+/// Service Discovery Protocol (SDP) implementation
+///
+/// Complete SDP server and client implementation with service record management,
+/// service search, and attribute retrieval capabilities.
 pub mod sdp;
 
 use crate::constants::{
